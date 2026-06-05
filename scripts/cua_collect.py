@@ -384,19 +384,23 @@ def main():
             stats["unsuitable"] += 1
         else:
             resume_content = ""
-            # 点"附件简历" — BOSS自动处理3种情况(dry-run也执行)
+            # 点"附件简历" — BOSS自动处理3种情况
             if not ax_click("附件简历", pid, wid):
                 js_click("附件简历", pid, wid)
-            # 等预览加载: 轮询直到出现简历关键词, 再等3秒完全渲染
+            # 等预览加载: 轮询"个人简历/基本信息/个人资料", 最多15秒
+            preview_opened = False
             for _ in range(15):
                 time.sleep(1)
                 tree = ax_tree(pid, wid)
                 if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
-                    time.sleep(3)  # 等全部文字渲染
+                    time.sleep(3)
+                    preview_opened = True
                     break
-            resume_content = extract_resume_text(pid, wid)
-            print(f"    → 简历: {len(resume_content)} 字" if resume_content
-                  else f"    → 简历: 等待发送/需同意")
+            if preview_opened:
+                resume_content = extract_resume_text(pid, wid)
+                print(f"    → 简历: {len(resume_content)} 字")
+            else:
+                print(f"    → 简历: 无附件/需同意")
 
             # 换微信
             wechat_requested = False
