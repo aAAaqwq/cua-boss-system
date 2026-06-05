@@ -15,6 +15,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
+from app.chat_reply import check_degree
 
 SESSION_ID = "boss-greeting"
 CHROME_BUNDLE_ID = "com.google.Chrome"
@@ -339,6 +340,7 @@ def main():
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--schools", type=str)
+    parser.add_argument("--min-degree", type=str, default="本科", help="最低学历要求")
     args = parser.parse_args()
 
     school_whitelist = (
@@ -347,7 +349,8 @@ def main():
     )
 
     print("=" * 50)
-    print(f"BOSS打招呼 | {len(school_whitelist)}所学校 | 上限{args.limit}人 | "
+    print(f"BOSS打招呼 | {len(school_whitelist)}所学校 | "
+          f"最低{args.min_degree} | 上限{args.limit}人 | "
           f"{'预览' if args.dry_run else '执行'}")
     print("=" * 50)
 
@@ -361,11 +364,11 @@ def main():
     if not candidates:
         print("\n⚠ 未找到候选人"); sys.exit(1)
 
-    print(f"5. 学校筛选...")
+    print(f"5. 学校+学历筛选...")
     passed = [
         c for c in candidates
         if match_school(c.get("school", ""), school_whitelist)
-        and c.get("degree") == "本科"
+        and check_degree(c.get("degree", ""), args.min_degree)
     ]
     passed = passed[:args.limit]
     print(f"  命中 {len(passed)}/{len(candidates)}")
