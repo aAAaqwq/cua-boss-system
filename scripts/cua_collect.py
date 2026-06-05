@@ -162,9 +162,11 @@ def js_click(text, pid, wid, last=False):
 
 
 def _click_unfit(pid, wid):
-    """动态获取不合适按钮坐标 → 系统级cliclick点击; JS失败则用cua像素点击兜底"""
-    if not __import__('shutil').which("cliclick"):
-        print("    ⚠ cliclick 未安装, 跳过不合适点击. 安装: brew install cliclick")
+    """动态获取不合适按钮坐标 → pyautogui系统级点击(pip install pyautogui)"""
+    try:
+        import pyautogui
+    except ImportError:
+        print("    ⚠ pyautogui 未安装, 跳过不合适点击. 安装: pip install pyautogui")
         return False
 
     js = """
@@ -189,32 +191,13 @@ def _click_unfit(pid, wid):
     d = r if isinstance(r, dict) and r.get("ok") else {}
 
     if not d.get("ok"):
-        print(f"    → JS坐标失败, 直接 cua 像素点击(1350,551)")
-        cua("click", json.dumps({"pid": pid, "window_id": wid, "x": 1350, "y": 551}))
-        time.sleep(0.5)
-        return True
+        return False
 
     sc_x = d["x"] + d.get("sx", 0)
     sc_y = d["y"] + d.get("sy", 0) + d.get("ch", 0)
-    print(f"    → cliclick ({sc_x},{sc_y})")
-    subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"], capture_output=True, text=True, timeout=10)
+    print(f"    → pyautogui.doubleClick({sc_x},{sc_y})")
+    pyautogui.doubleClick(sc_x, sc_y)
     time.sleep(0.8)
-    # 检测下拉 → 开了再点一次
-    try:
-        check = cua("page", json.dumps({
-            "pid": pid, "window_id": wid, "action": "execute_javascript",
-            "javascript": """
-            var items = document.querySelectorAll('.operate-icon-item');
-            if (items.length < 9) return 'no';
-            var nfw = items[8].querySelector('.not-fit-wrap');
-            return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
-            """
-        }))
-        dropdown = str(check.get("result", check.get("text", ""))) if isinstance(check, dict) else ""
-    except:
-        dropdown = ""
-    if dropdown == "open":
-        subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"], capture_output=True, text=True, timeout=10)
     return True
 
     for line in tree.split("\n"):
