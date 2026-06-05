@@ -162,13 +162,14 @@ def js_click(text, pid, wid, last=False):
 
 
 def _click_unfit(pid, wid):
-    """动态获取不合适按钮坐标 → pyautogui系统级点击(pip install pyautogui)"""
+    """动态获取不合适按钮坐标 → pyautogui系统级点击"""
     try:
         import pyautogui
     except ImportError:
-        print("    ⚠ pyautogui 未安装, 跳过不合适点击. 安装: pip install pyautogui")
+        print("    ⚠ pyautogui 未安装, 跳过. pip install pyautogui --break-system-packages")
         return False
 
+    # 一次JS: 坐标+屏幕偏移
     js = """
     (function(){
         var result = {ok: false};
@@ -189,17 +190,20 @@ def _click_unfit(pid, wid):
     except:
         r = {}
     d = r if isinstance(r, dict) and r.get("ok") else {}
-
     if not d.get("ok"):
+        print("    → 坐标获取失败, 跳过")
         return False
 
     sc_x = d["x"] + d.get("sx", 0)
     sc_y = d["y"] + d.get("sy", 0) + d.get("ch", 0)
-    print(f"    → pyautogui.doubleClick({sc_x},{sc_y})")
-    pyautogui.doubleClick(sc_x, sc_y)
-    time.sleep(0.8)
+    print(f"    → 点不合适 ({sc_x},{sc_y})")
+    pyautogui.click(sc_x, sc_y)
     return True
 
+
+def ax_click(text, pid, wid):
+    """AX树找元素点击"""
+    tree = ax_tree(pid, wid)
     for line in tree.split("\n"):
         if text in line and ('AXLink' in line or 'AXButton' in line):
             m = re.search(r'\[(\d+)\]', line)
