@@ -188,12 +188,22 @@ def _click_unfit(pid, wid):
             }))
             sc_x = cx + sy_info.get("sx", 0)
             sc_y = cy + sy_info.get("sy", 0) + sy_info.get("ch", 0)
-            # 点两次: 第一次打开下拉, 第二次确认标记
+            # 点一次 → 检测是否有下拉弹窗 → 有则再点一次确认
             subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
                            capture_output=True, text=True, timeout=10)
-            time.sleep(0.5)
-            subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
-                           capture_output=True, text=True, timeout=10)
+            time.sleep(0.8)
+            check = cua("page", json.dumps({
+                "pid": pid, "window_id": wid, "action": "execute_javascript",
+                "javascript": """
+                var items = document.querySelectorAll('.operate-icon-item');
+                if (items.length < 9) return 'no';
+                var nfw = items[8].querySelector('.not-fit-wrap');
+                return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
+                """
+            }))
+            if isinstance(check, dict) and check.get("result", check.get("text", "")) == "open":
+                subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
+                               capture_output=True, text=True, timeout=10)
             return True
     except: pass
     return False
