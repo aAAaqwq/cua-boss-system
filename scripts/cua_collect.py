@@ -188,6 +188,10 @@ def _click_unfit(pid, wid):
             }))
             sc_x = cx + sy_info.get("sx", 0)
             sc_y = cy + sy_info.get("sy", 0) + sy_info.get("ch", 0)
+            # 点两次: 第一次打开下拉, 第二次确认标记
+            subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
+                           capture_output=True, text=True, timeout=10)
+            time.sleep(0.5)
             subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
                            capture_output=True, text=True, timeout=10)
             return True
