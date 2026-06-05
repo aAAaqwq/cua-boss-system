@@ -397,23 +397,33 @@ def main():
                 resume_content = existing_resume
                 print(f"    → 简历: 已存在({len(resume_content)}字), 跳过提取")
             else:
-                # 点"附件简历" — BOSS自动处理3种情况
+                # 点"附件简历" → 检查3种情况
                 if not ax_click("附件简历", pid, wid):
                     js_click("附件简历", pid, wid)
-                # 等预览加载: 轮询"个人简历/基本信息/个人资料", 最多15秒
-                preview_opened = False
-                for _ in range(15):
-                    time.sleep(1)
-                    tree = ax_tree(pid, wid)
-                    if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
-                        time.sleep(3)
-                        preview_opened = True
-                        break
-                if preview_opened:
+                time.sleep(2)
+                tree = ax_tree(pid, wid)
+
+                # Case 1: 附件简历出现了 → 等预览渲染 → 提取
+                if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
+                    for _ in range(10):
+                        time.sleep(1)
+                        if '个人简历' in ax_tree(pid, wid) or '基本信息' in ax_tree(pid, wid):
+                            time.sleep(3)
+                            break
                     resume_content = extract_resume_text(pid, wid)
-                    print(f"    → 简历: {len(resume_content)} 字")
+                    print(f"    → 简历(Case1): {len(resume_content)} 字")
+
+                # Case 2: "双方回复后可以向TA请求" → 不可提取
+                elif '双方回复后可以向TA请求' in tree:
+                    print(f"    → 简历(Case2): 双方回复后可请求, 跳过")
+
+                # Case 3: "确定向牛人请求简历" → 点确定
+                elif '确定向牛人请求简历' in tree or '确认向牛人请求简历' in tree:
+                    js_click("确定", pid, wid)
+                    print(f"    → 简历(Case3): 已请求发送")
+                    time.sleep(1)
                 else:
-                    print(f"    → 简历: 无附件/需同意")
+                    print(f"    → 简历: 未知状态")
 
             # 微信: 已交换→提取微信号, 可换→点换微信→确认, DB已有→跳过
             wechat_id = ""
