@@ -384,27 +384,47 @@ def main():
             stats["unsuitable"] += 1
         else:
             resume_content = ""
-            # 点"附件简历" — BOSS自动处理3种情况
-            if not ax_click("附件简历", pid, wid):
-                js_click("附件简历", pid, wid)
-            # 等预览加载: 轮询"个人简历/基本信息/个人资料", 最多15秒
-            preview_opened = False
-            for _ in range(15):
-                time.sleep(1)
-                tree = ax_tree(pid, wid)
-                if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
-                    time.sleep(3)
-                    preview_opened = True
-                    break
-            if preview_opened:
-                resume_content = extract_resume_text(pid, wid)
-                print(f"    → 简历: {len(resume_content)} 字")
-            else:
-                print(f"    → 简历: 无附件/需同意")
+            # 检查DB是否已有简历(>200字才是有效简历)
+            existing_resume = None
+            if conn:
+                row = conn.execute(
+                    "SELECT resume_content FROM candidates WHERE name=? AND job_position=?",
+                    (name, job)).fetchone()
+                if row and row[0] and len(row[0]) > 200:
+                    existing_resume = row[0]
 
-            # 换微信
+            if existing_resume:
+                resume_content = existing_resume
+                print(f"    → 简历: 已存在({len(resume_content)}字), 跳过提取")
+            else:
+                # 点"附件简历" — BOSS自动处理3种情况
+                if not ax_click("附件简历", pid, wid):
+                    js_click("附件简历", pid, wid)
+                # 等预览加载: 轮询"个人简历/基本信息/个人资料", 最多15秒
+                preview_opened = False
+                for _ in range(15):
+                    time.sleep(1)
+                    tree = ax_tree(pid, wid)
+                    if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
+                        time.sleep(3)
+                        preview_opened = True
+                        break
+                if preview_opened:
+                    resume_content = extract_resume_text(pid, wid)
+                    print(f"    → 简历: {len(resume_content)} 字")
+                else:
+                    print(f"    → 简历: 无附件/需同意")
+
+            # 换微信（DB已有则跳过）
             wechat_requested = False
-            if "换微信" in ax_tree(pid, wid):
+            if conn:
+                wx_row = conn.execute(
+                    "SELECT has_wechat FROM candidates WHERE name=? AND job_position=?",
+                    (name, job)).fetchone()
+                if wx_row and wx_row[0]:
+                    wechat_requested = True
+                    print(f"    → 微信: 已存在, 跳过")
+            if not wechat_requested and "换微信" in ax_tree(pid, wid):
                 js_click("换微信", pid, wid); time.sleep(1.5)
                 if "确定与对方交换微信" in ax_tree(pid, wid):
                     js_click("确定", pid, wid)
