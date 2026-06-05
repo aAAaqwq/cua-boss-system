@@ -8,6 +8,7 @@
 |------|------|
 | Python 3.10+ | 零 pip 依赖，纯标准库 |
 | [cua-driver](https://github.com/cua-driver/cua-driver-rs) | macOS Accessibility API 操控 Chrome |
+| [cliclick](https://github.com/BlueM/cliclick) | 系统级鼠标点击 (`brew install cliclick`) |
 | Chrome | 需登录 BOSS直聘 |
 
 ## 快速开始

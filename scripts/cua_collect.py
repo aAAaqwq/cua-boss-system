@@ -163,6 +163,9 @@ def js_click(text, pid, wid, last=False):
 
 def _click_unfit(pid, wid):
     """动态获取不合适按钮坐标 → 系统级cliclick点击"""
+    if not __import__('shutil').which("cliclick"):
+        print("    ⚠ cliclick 未安装, 跳过不合适点击. 安装: brew install cliclick")
+        return False
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": """
