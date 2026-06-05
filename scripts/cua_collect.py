@@ -233,8 +233,12 @@ def extract_resume_text(pid, wid):
                    '拒绝','同意','在线简历','附件简历','发送',
                    '求简历','换电话','换微信','约面试','不合适'): continue
         if re.match(r'^(?:你好|您好|BOSS|Boss|boss|牛人|对方|此牛人|顾问|比较感兴趣|岗位主要是)', val): continue
+        if re.match(r'^\d+$', val): continue  # 纯数字（未读计数/分页）
+        if re.match(r'^(?:06月|07月|08月|09月|10月|11月|12月)\d{2}日$', val): continue
+        if re.match(r'^[一-鿿a-zA-Z]{2,4}$', val) and len(val) <= 4: continue  # 名字混入（左侧面板）
         if any(kw in val for kw in ('沟通的职位','优先提醒','设置邮箱',
-                                      '您可以在线预览','后投递的简历','对方想发送')): continue
+                                      '您可以在线预览','后投递的简历','对方想发送',
+                                      '点击预览附件简历')): continue
         if re.match(r'^[a-f0-9]{40,}~+$', val): continue
 
         lines.append(val)
@@ -378,8 +382,9 @@ def main():
             resume_content = ""
             if not args.dry_run:
                 # ★ 点"附件简历" — BOSS自动处理3种情况
-                # 点"附件简历" — BOSS自动处理: 有就预览, 待同意就弹同意框, 没有就弹请求框
-                ax_click("附件简历", pid, wid)
+                # 点"附件简历" — BOSS自动处理3种情况
+                if not ax_click("附件简历", pid, wid):
+                    js_click("附件简历", pid, wid)  # AX失败用JS兜底
                     time.sleep(3)
                     resume_content = extract_resume_text(pid, wid)
                     if resume_content:
