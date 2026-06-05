@@ -397,27 +397,27 @@ def main():
                 resume_content = existing_resume
                 print(f"    → 简历: 已存在({len(resume_content)}字), 跳过提取")
             else:
-                # 点"附件简历" → 检查3种情况
+                # 点"附件简历"前检查是否有旧预览残留
+                pre_tree = ax_tree(pid, wid)
+                pre_has_resume = '个人简历' in pre_tree or '基本信息' in pre_tree
+
                 if not ax_click("附件简历", pid, wid):
                     js_click("附件简历", pid, wid)
                 time.sleep(2)
                 tree = ax_tree(pid, wid)
 
-                # Case 1: 附件简历出现了 → 等预览渲染 → 提取
-                if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
-                    for _ in range(10):
-                        time.sleep(1)
-                        if '个人简历' in ax_tree(pid, wid) or '基本信息' in ax_tree(pid, wid):
-                            time.sleep(3)
-                            break
+                # Case 1: 附件简历出现了(且不是旧预览残留)
+                now_has_resume = '个人简历' in tree or '基本信息' in tree or '个人资料' in tree
+                if now_has_resume and not pre_has_resume:
+                    time.sleep(3)  # 等渲染
                     resume_content = extract_resume_text(pid, wid)
                     print(f"    → 简历(Case1): {len(resume_content)} 字")
 
-                # Case 2: "双方回复后可以向TA请求" → 不可提取
+                # Case 2: "双方回复后可以向TA请求"
                 elif '双方回复后可以向TA请求' in tree:
                     print(f"    → 简历(Case2): 双方回复后可请求, 跳过")
 
-                # Case 3: "确定向牛人请求简历" → 点确定
+                # Case 3: "确定向牛人请求简历"
                 elif '确定向牛人请求简历' in tree or '确认向牛人请求简历' in tree:
                     js_click("确定", pid, wid)
                     print(f"    → 简历(Case3): 已请求发送")
@@ -461,15 +461,15 @@ def main():
                         wechat_requested = True
                         print(f"    → 微信: 已请求交换")
 
-            # 从简历内容中提取手机号&邮箱
+            # 从简历内容中提取手机号&邮箱（不依赖标签, 直接搜模式）
             phone = email = ""
             if resume_content:
-                pm = re.search(r'(?:电话|联系电话|手机)[：:]\s*(\d{11})', resume_content)
-                if not pm: pm = re.search(r'(?<!\d)(1[3-9]\d{9})(?!\d)', resume_content)
+                # 手机号: 11位1开头
+                pm = re.search(r'(?<!\d)(1[3-9]\d{9})(?!\d)', resume_content)
                 if pm: phone = pm.group(1)
-                em = re.search(r'(?:邮箱|Email|E-mail)[：:]\s*(\S+@\S+\.\S+)', resume_content)
-                if not em: em = re.search(r'(\S+@\S+\.\S{2,})', resume_content)
-                if em: email = em.group(1)
+                # 邮箱
+                em = re.search(r'(\S+@\S+\.\S{2,})', resume_content)
+                if em: email = em.group(1).rstrip('.,;:）)')
 
             data = {
                 "name": name, "job": job, "school": school, "degree": degree,
