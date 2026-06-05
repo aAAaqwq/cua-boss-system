@@ -268,10 +268,14 @@ def scan_candidates(pid: int, window_id: int) -> list[dict]:
         s = line.strip()
 
         m = re.search(r'AXStaticText\s*=\s*"([一-龥]{2,8}(?:大学|学院|学校))"', s)
-        if m: current["school"] = m.group(1)
+        if m:
+            current["school"] = m.group(1)
+            # 每次遇到新学校都把学历清掉，等后面重新匹配
+            current.pop("degree", None)
 
         m = re.search(r'AXStaticText\s*=\s*"(博士|硕士|本科|大专)"', s)
-        if m and "school" in current: current["degree"] = m.group(1)
+        if m and "school" in current and "degree" not in current:
+            current["degree"] = m.group(1)
 
         m = re.search(r'AXImage\s*\(\s*(\S+?)\s*\)', s)
         if m:
