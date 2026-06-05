@@ -161,6 +161,40 @@ def js_click(text, pid, wid, last=False):
     return "clicked" in str(r.get("result", r.get("text", "")))
 
 
+def _click_unfit(pid, wid):
+    """动态获取不合适按钮坐标 → 系统级cliclick点击"""
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript",
+        "javascript": """
+        (function(){
+            var items = document.querySelectorAll('.operate-icon-item');
+            if (items.length >= 9) {
+                var el = items[8];
+                var rc = el.getBoundingClientRect();
+                return JSON.stringify({x: Math.round(rc.left + rc.width/2), y: Math.round(rc.top + rc.height/2)});
+            }
+            return 'not_found';
+        })()
+        """,
+    }))
+    try:
+        coord = json.loads(r.get("result", r.get("text", "{}")))
+        cx, cy = coord.get("x", 0), coord.get("y", 0)
+        if cx and cy:
+            # DOM坐标→屏幕坐标: +window.screenY (viewport偏移)
+            sy_info = cua("page", json.dumps({
+                "pid": pid, "window_id": wid, "action": "execute_javascript",
+                "javascript": "return JSON.stringify({sy: window.screenY, sx: window.screenX})",
+            }))
+            sc_x = cx + sy_info.get("sx", 0)
+            sc_y = cy + sy_info.get("sy", 74)
+            subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
+                           capture_output=True, text=True, timeout=10)
+            return True
+    except: pass
+    return False
+
+
 def ax_click(text, pid, wid):
     """AX树找元素点击"""
     tree = ax_tree(pid, wid)
@@ -381,12 +415,12 @@ def main():
         if not match_school(school, whitelist):
             print(f"    → 学校不符，点'不合适'")
             if not args.dry_run:
-                js_click("不合适", pid, wid, last=True)
+                _click_unfit(pid, wid)
             stats["unsuitable"] += 1
         elif degree and not check_degree(degree, args.min_degree):
             print(f"    → 学历不符，点'不合适'")
             if not args.dry_run:
-                js_click("不合适", pid, wid, last=True)
+                _click_unfit(pid, wid)
             stats["unsuitable"] += 1
         else:
             resume_content = ""
