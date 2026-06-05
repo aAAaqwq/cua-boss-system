@@ -394,7 +394,7 @@ def main():
                 row = conn.execute(
                     "SELECT resume_content FROM candidates WHERE name=? AND job_position=?",
                     (name, job)).fetchone()
-                if row and row[0] and len(row[0]) > 200:
+                if row and row[0]:
                     existing_resume = row[0]
 
             if existing_resume:
