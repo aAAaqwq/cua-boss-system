@@ -329,14 +329,3 @@ def generate_reply(
     )
 
 
-# ══════════════════════════════════════════════════
-# 兼容旧接口 (cua_chat_loop.py 用)
-# ══════════════════════════════════════════════════
-
-def load_templates(config_path: Optional[str] = None) -> list[dict]:
-    """兼容旧接口: 返回扁平模板列表"""
-    cfg = load_jobs_config(config_path)
-    templates = list(cfg.get("fallback_templates", []))
-    for job in cfg.get("jobs", []):
-        templates.extend(job.get("templates", []))
-    return sorted(templates, key=lambda t: t.get("priority", 99))
