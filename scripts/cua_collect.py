@@ -182,32 +182,38 @@ def _click_unfit(pid, wid):
         return JSON.stringify(result);
     })()
     """
-    r = cua("page", json.dumps({"pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js}))
+    try:
+        r = cua("page", json.dumps({"pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js}))
+    except:
+        r = {}
     d = r if isinstance(r, dict) and r.get("ok") else {}
 
     if not d.get("ok"):
-        # 兜底: cua像素点击
-        print("    → JS坐标失败, cua像素兜底")
+        print(f"    → JS坐标失败, 直接 cua 像素点击(1350,551)")
         cua("click", json.dumps({"pid": pid, "window_id": wid, "x": 1350, "y": 551}))
-        time.sleep(1)
-        cua("click", json.dumps({"pid": pid, "window_id": wid, "x": 1350, "y": 551}))
+        time.sleep(0.5)
         return True
 
     sc_x = d["x"] + d.get("sx", 0)
     sc_y = d["y"] + d.get("sy", 0) + d.get("ch", 0)
+    print(f"    → cliclick ({sc_x},{sc_y})")
     subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"], capture_output=True, text=True, timeout=10)
     time.sleep(0.8)
     # 检测下拉 → 开了再点一次
-    check = cua("page", json.dumps({
-        "pid": pid, "window_id": wid, "action": "execute_javascript",
-        "javascript": """
-        var items = document.querySelectorAll('.operate-icon-item');
-        if (items.length < 9) return 'no';
-        var nfw = items[8].querySelector('.not-fit-wrap');
-        return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
-        """
-    }))
-    if isinstance(check, dict) and str(check.get("result", check.get("text", ""))) == "open":
+    try:
+        check = cua("page", json.dumps({
+            "pid": pid, "window_id": wid, "action": "execute_javascript",
+            "javascript": """
+            var items = document.querySelectorAll('.operate-icon-item');
+            if (items.length < 9) return 'no';
+            var nfw = items[8].querySelector('.not-fit-wrap');
+            return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
+            """
+        }))
+        dropdown = str(check.get("result", check.get("text", ""))) if isinstance(check, dict) else ""
+    except:
+        dropdown = ""
+    if dropdown == "open":
         subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"], capture_output=True, text=True, timeout=10)
     return True
 
