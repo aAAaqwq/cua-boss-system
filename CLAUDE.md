@@ -10,12 +10,12 @@ cua-boss-system/
 │   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + FilterCriteria
 │   └── chat_reply.py         # 模板匹配 + DeepSeek API + 学历判断 + 岗位检测
 ├── config/
-│   ├── jobs.json             # 岗位配置(sync_jobs.py 自动同步)
+│   ├── jobs.json             # 岗位配置(cua_sync_jobs.py 自动同步)
 │   └── chat_templates.json   # 话术模板(按priority排序)
 ├── scripts/
-│   ├── cua_review_loop.py    # 沟通页批量智能沟通(学校筛选+不合适+岗位感知回复)
+│   ├── cua_chat_loop.py    # 沟通页批量智能沟通(学校筛选+不合适+岗位感知回复)
 │   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼(学校筛选+学历筛选)
-│   └── sync_jobs.py          # 职位管理页职位信息同步(提取→覆盖写入jobs.json)
+│   └── cua_sync_jobs.py          # 职位管理页职位信息同步(提取→覆盖写入jobs.json)
 ├── CLAUDE.md
 └── README.md
 ```
@@ -39,14 +39,14 @@ python scripts/cua_greeting_loop.py --min-degree 硕士  # 最低学历
 
 流程: 进入推荐页 → AX树扫描候选人(学校取教育经历最后一行=本科) → 学校白名单+学历筛选 → 逐个点击打招呼 → 检测上限弹窗
 
-### cua_review_loop.py — 沟通页批量智能沟通
+### cua_chat_loop.py — 沟通页批量智能沟通
 
 ```bash
-python scripts/cua_review_loop.py                   # 最多20人
-python scripts/cua_review_loop.py --dry-run          # 预览
-python scripts/cua_review_loop.py --limit 10         # 限制人数
-python scripts/cua_review_loop.py --min-degree 硕士   # 最低学历
-python scripts/cua_review_loop.py --schools "清华,北大" # 自定义学校
+python scripts/cua_chat_loop.py                   # 最多20人
+python scripts/cua_chat_loop.py --dry-run          # 预览
+python scripts/cua_chat_loop.py --limit 10         # 限制人数
+python scripts/cua_chat_loop.py --min-degree 硕士   # 最低学历
+python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
 ```
 
 流程: 进入聊天页 → 扫描未读 → 逐个审查:
@@ -56,12 +56,12 @@ python scripts/cua_review_loop.py --schools "清华,北大" # 自定义学校
 4. 学历不达标 → 点"不合适"
 5. 符合条件 → 岗位检测 → 专属话术 → 输入回复
 
-### sync_jobs.py — 职位管理页职位信息同步
+### cua_sync_jobs.py — 职位管理页职位信息同步
 
 ```bash
-python scripts/sync_jobs.py             # 预览
-python scripts/sync_jobs.py --write     # 提取+写入
-python scripts/sync_jobs.py --limit 3   # 调试
+python scripts/cua_sync_jobs.py             # 预览
+python scripts/cua_sync_jobs.py --write     # 提取+写入
+python scripts/cua_sync_jobs.py --limit 3   # 调试
 ```
 
 流程: 进入职位管理 → 扫描开放中岗位(同名去重) → 逐个点编辑:

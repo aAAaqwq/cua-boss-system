@@ -9,9 +9,9 @@
   4. 覆盖写入 jobs.json（替换旧数据，保留话术模板）
 
 用法:
-  python scripts/sync_jobs.py              # 预览
-  python scripts/sync_jobs.py --write      # 提取 + 写入
-  python scripts/sync_jobs.py --limit 3    # 只处理前N个
+  python scripts/cua_sync_jobs.py              # 预览
+  python scripts/cua_sync_jobs.py --write      # 提取 + 写入
+  python scripts/cua_sync_jobs.py --limit 3    # 只处理前N个
 """
 import json
 import subprocess

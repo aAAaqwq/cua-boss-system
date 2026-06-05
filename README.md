@@ -14,18 +14,18 @@
 
 ```bash
 # 沟通页批量智能沟通（推荐入口）
-python scripts/cua_review_loop.py --dry-run
+python scripts/cua_chat_loop.py --dry-run
 
 # 推荐页批量主动打招呼
 python scripts/cua_greeting_loop.py --dry-run
 
 # 职位管理页职位信息同步
-python scripts/sync_jobs.py --write
+python scripts/cua_sync_jobs.py --write
 ```
 
 ## 脚本
 
-### `cua_review_loop.py` — 沟通页批量智能沟通
+### `cua_chat_loop.py` — 沟通页批量智能沟通
 
 打开聊天页，逐个查看未读联系人，自动判断并执行：
 
@@ -34,11 +34,11 @@ python scripts/sync_jobs.py --write
 - 岗位感知话术 → 匹配专属回复模板
 
 ```bash
-python scripts/cua_review_loop.py                   # 最多20人
-python scripts/cua_review_loop.py --dry-run          # 预览
-python scripts/cua_review_loop.py --limit 10         # 限制人数
-python scripts/cua_review_loop.py --min-degree 硕士   # 最低学历
-python scripts/cua_review_loop.py --schools "清华,北大" # 自定义学校
+python scripts/cua_chat_loop.py                   # 最多20人
+python scripts/cua_chat_loop.py --dry-run          # 预览
+python scripts/cua_chat_loop.py --limit 10         # 限制人数
+python scripts/cua_chat_loop.py --min-degree 硕士   # 最低学历
+python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
 ```
 
 ### `cua_greeting_loop.py` — 推荐页批量主动打招呼
@@ -51,18 +51,18 @@ python scripts/cua_greeting_loop.py --limit 5
 python scripts/cua_greeting_loop.py --min-degree 硕士
 ```
 
-### `sync_jobs.py` — 职位管理页职位信息同步
+### `cua_sync_jobs.py` — 职位管理页职位信息同步
 
 进入职位管理页 → 扫描开放中岗位 → 逐个点编辑提取详情 → 覆盖写入 `config/jobs.json`：
 
 ```bash
-python scripts/sync_jobs.py             # 预览
-python scripts/sync_jobs.py --write     # 提取+写入
+python scripts/cua_sync_jobs.py             # 预览
+python scripts/cua_sync_jobs.py --write     # 提取+写入
 ```
 
 ## 配置
 
-### `config/jobs.json` — 岗位配置（sync_jobs.py 自动同步）
+### `config/jobs.json` — 岗位配置（cua_sync_jobs.py 自动同步）
 
 ```json
 {
@@ -97,9 +97,9 @@ cua-boss-system/
 │   ├── jobs.json             # 岗位配置
 │   └── chat_templates.json   # 话术模板
 ├── scripts/
-│   ├── cua_review_loop.py    # 沟通页批量智能沟通
+│   ├── cua_chat_loop.py    # 沟通页批量智能沟通
 │   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼
-│   └── sync_jobs.py          # 职位管理页职位信息同步
+│   └── cua_sync_jobs.py          # 职位管理页职位信息同步
 ├── CLAUDE.md
 └── README.md
 ```

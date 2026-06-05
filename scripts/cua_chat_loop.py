@@ -9,11 +9,11 @@ cua-driver 驱动的 BOSS直聘候选人审查 + 批量回复
   3. 符合条件 → 匹配话术模板 → 输入回复
 
 用法:
-  python scripts/cua_review_loop.py                # 审查+回复(最多20人)
-  python scripts/cua_review_loop.py --dry-run      # 仅预览，输入不发送
-  python scripts/cua_review_loop.py --limit 10     # 最多10人
-  python scripts/cua_review_loop.py --schools "清华,北大,浙大"  # 自定义学校
-  python scripts/cua_review_loop.py --min-degree 硕士
+  python scripts/cua_chat_loop.py                # 审查+回复(最多20人)
+  python scripts/cua_chat_loop.py --dry-run      # 仅预览，输入不发送
+  python scripts/cua_chat_loop.py --limit 10     # 最多10人
+  python scripts/cua_chat_loop.py --schools "清华,北大,浙大"  # 自定义学校
+  python scripts/cua_chat_loop.py --min-degree 硕士
 """
 import argparse
 import json
@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
 from app.chat_reply import load_jobs_config, generate_reply, check_degree, detect_job
 
-SESSION_ID = "boss-review"
+SESSION_ID = "boss-chat"
 CHROME_BUNDLE_ID = "com.google.Chrome"
 CHAT_URL = "https://www.zhipin.com/web/chat/index"
 
