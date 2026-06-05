@@ -461,13 +461,23 @@ def main():
                         wechat_requested = True
                         print(f"    → 微信: 已请求交换")
 
+            # 从简历内容中提取手机号&邮箱
+            phone = email = ""
+            if resume_content:
+                pm = re.search(r'(?:电话|联系电话|手机)[：:]\s*(\d{11})', resume_content)
+                if not pm: pm = re.search(r'(?<!\d)(1[3-9]\d{9})(?!\d)', resume_content)
+                if pm: phone = pm.group(1)
+                em = re.search(r'(?:邮箱|Email|E-mail)[：:]\s*(\S+@\S+\.\S+)', resume_content)
+                if not em: em = re.search(r'(\S+@\S+\.\S{2,})', resume_content)
+                if em: email = em.group(1)
+
             data = {
                 "name": name, "job": job, "school": school, "degree": degree,
                 "resume_content": resume_content,
                 "resume_filename": panel.get("resume_filename", ""),
                 "has_resume": bool(resume_content),
                 "wechat": wechat_id, "has_wechat": wechat_requested or bool(wechat_id),
-                "status": "collected",
+                "phone": phone, "email": email, "status": "collected",
             }
             if not args.dry_run: upsert(conn, data)
             stats["collected"] += 1
