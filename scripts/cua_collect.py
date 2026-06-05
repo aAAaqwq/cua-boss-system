@@ -181,13 +181,13 @@ def _click_unfit(pid, wid):
         coord = json.loads(r.get("result", r.get("text", "{}")))
         cx, cy = coord.get("x", 0), coord.get("y", 0)
         if cx and cy:
-            # DOM坐标→屏幕坐标: +window.screenY (viewport偏移)
+            # DOM坐标→屏幕坐标: dom + screenY + chrome工具栏高度
             sy_info = cua("page", json.dumps({
                 "pid": pid, "window_id": wid, "action": "execute_javascript",
-                "javascript": "return JSON.stringify({sy: window.screenY, sx: window.screenX})",
+                "javascript": "return JSON.stringify({sy:window.screenY,sx:window.screenX,ch:window.outerHeight-window.innerHeight})",
             }))
             sc_x = cx + sy_info.get("sx", 0)
-            sc_y = cy + sy_info.get("sy", 74)
+            sc_y = cy + sy_info.get("sy", 0) + sy_info.get("ch", 0)
             subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
                            capture_output=True, text=True, timeout=10)
             return True
