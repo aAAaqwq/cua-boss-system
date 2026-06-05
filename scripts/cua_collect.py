@@ -415,28 +415,48 @@ def main():
                 else:
                     print(f"    → 简历: 无附件/需同意")
 
-            # 换微信（DB已有则跳过）
+            # 微信: 已交换→提取微信号, 可换→点换微信→确认, DB已有→跳过
+            wechat_id = ""
             wechat_requested = False
             if conn:
                 wx_row = conn.execute(
-                    "SELECT has_wechat FROM candidates WHERE name=? AND job_position=?",
+                    "SELECT wechat, has_wechat FROM candidates WHERE name=? AND job_position=?",
                     (name, job)).fetchone()
-                if wx_row and wx_row[0]:
+                if wx_row and wx_row[1] and wx_row[0]:
+                    wechat_id = wx_row[0]
                     wechat_requested = True
-                    print(f"    → 微信: 已存在, 跳过")
-            if not wechat_requested and "换微信" in ax_tree(pid, wid):
-                js_click("换微信", pid, wid); time.sleep(1.5)
-                if "确定与对方交换微信" in ax_tree(pid, wid):
-                    js_click("确定", pid, wid)
-                    wechat_requested = True
-                    print(f"    → 微信: 已请求交换")
+                    print(f"    → 微信: 已存在({wechat_id}), 跳过")
+
+            if not wechat_requested:
+                tree = ax_tree(pid, wid)
+                # 已交换: 点"查看微信"→读微信号
+                if "查看微信" in tree:
+                    js_click("查看微信", pid, wid); time.sleep(1)
+                    tree2 = ax_tree(pid, wid)
+                    for line in tree2.split('\n'):
+                        if '微信号' in line and 'AXHeading' in line:
+                            m = re.search(r'"([^"]+)"', line)
+                            if m:
+                                parts = m.group(1).split('：')
+                                if len(parts) > 1:
+                                    wechat_id = parts[-1].strip()
+                                    wechat_requested = True
+                                    print(f"    → 微信: {wechat_id}")
+                                    break
+                # 未交换: 点"换微信"→确认
+                elif "换微信" in tree:
+                    js_click("换微信", pid, wid); time.sleep(1.5)
+                    if "确定与对方交换微信" in ax_tree(pid, wid):
+                        js_click("确定", pid, wid)
+                        wechat_requested = True
+                        print(f"    → 微信: 已请求交换")
 
             data = {
                 "name": name, "job": job, "school": school, "degree": degree,
                 "resume_content": resume_content,
                 "resume_filename": panel.get("resume_filename", ""),
                 "has_resume": bool(resume_content),
-                "wechat": "", "has_wechat": wechat_requested,
+                "wechat": wechat_id, "has_wechat": wechat_requested or bool(wechat_id),
                 "status": "collected",
             }
             if not args.dry_run: upsert(conn, data)
