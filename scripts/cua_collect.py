@@ -131,26 +131,30 @@ def click_sidebar(name, pid, wid):
     return "clicked" in str(r.get("result", r.get("text", "")))
 
 
-def js_click(text, pid, wid):
-    """JS点击任意文字元素（找父级可点击）"""
+def js_click(text, pid, wid, last=False):
+    """JS点击任意文字元素（找父级可点击）。last=True时取最后一个匹配元素"""
     safe = text.replace("'", "\\'")
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": f"""
         (function(){{
             var all = document.querySelectorAll('*');
+            var candidates = [];
             for (var i = 0; i < all.length; i++) {{
                 if ((all[i].textContent||'').trim()==='{safe}' && all[i].children.length===0) {{
-                    for (var lvl=0; lvl<8; lvl++) {{
-                        if (all[i].onclick || getComputedStyle(all[i]).cursor==='pointer' ||
-                            all[i].tagName==='BUTTON' || all[i].tagName==='A') {{
-                            all[i].click(); return 'clicked';
-                        }}
-                        all[i] = all[i].parentElement; if (!all[i]) break;
-                    }}
+                    candidates.push(all[i]);
                 }}
             }}
-            return 'not_found';
+            var el = {f"candidates[candidates.length-1]" if last else "candidates[0]"};
+            if (!el) return 'not_found';
+            for (var lvl=0; lvl<8; lvl++) {{
+                if (el.onclick || getComputedStyle(el).cursor==='pointer' ||
+                    el.tagName==='BUTTON' || el.tagName==='A') {{
+                    el.click(); return 'clicked';
+                }}
+                el = el.parentElement; if (!el) break;
+            }}
+            return 'not_clickable';
         }})()
         """,
     }))
@@ -377,14 +381,12 @@ def main():
         if not match_school(school, whitelist):
             print(f"    → 学校不符，点'不合适'")
             if not args.dry_run:
-                if not ax_click("不合适", pid, wid):
-                    js_click("不合适", pid, wid)
+                js_click("不合适", pid, wid, last=True)
             stats["unsuitable"] += 1
         elif degree and not check_degree(degree, args.min_degree):
             print(f"    → 学历不符，点'不合适'")
             if not args.dry_run:
-                if not ax_click("不合适", pid, wid):
-                    js_click("不合适", pid, wid)
+                js_click("不合适", pid, wid, last=True)
             stats["unsuitable"] += 1
         else:
             resume_content = ""
