@@ -31,16 +31,19 @@ python scripts/cua_chat_loop.py --dry-run
 
 ## 脚本说明
 
-### `cua_review_loop.py` — 候选人审查（★ 推荐）
+### `cua_review_loop.py` — 批量回复（★ 推荐）
 
-逐个查看未读联系人，自动判断并执行：
+`cua_chat_loop.py` 的增强版，在批量回复基础上增加：
+- 学校白名单筛选（不符合自动点"不合适"）
+- 已回复判断（上一句是我们发的则跳过，避免重复回复）
+- 岗位感知话术（根据候选人消息检测目标岗位，匹配专属模板）
 
 ```
 打开聊天页 → 扫描未读 → 逐个点击
   ├─ 上一句是我们发的 → 跳过
-  ├─ 学校不在名校白名单 → 点"不合适"
+  ├─ 学校不在白名单 → 点"不合适"
   ├─ 学历不达标 → 点"不合适"
-  └─ 符合条件 → 话术模板匹配 → 输入回复
+  └─ 符合条件 → 岗位检测 → 专属话术 → 输入回复
 ```
 
 ```bash
@@ -77,9 +80,9 @@ python scripts/cua_greeting_loop.py --limit 5
 python scripts/cua_greeting_loop.py --schools "清华,北大"
 ```
 
-### `cua_chat_loop.py` — 聊天页批量回复
+### `cua_chat_loop.py` — 批量回复（基础版）
 
-扫描未读 → 读对话 → 模板匹配 → 发送：
+扫描未读 → 读对话 → 模板匹配 → 发送。无学校筛选和已回复判断，推荐用 `cua_review_loop.py` 替代：
 
 ```bash
 python scripts/cua_chat_loop.py --dry-run
