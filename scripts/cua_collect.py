@@ -376,11 +376,15 @@ def main():
         # 筛选
         if not match_school(school, whitelist):
             print(f"    → 学校不符，点'不合适'")
-            if not args.dry_run: ax_click("不合适", pid, wid)
+            if not args.dry_run:
+                if not ax_click("不合适", pid, wid):
+                    js_click("不合适", pid, wid)
             stats["unsuitable"] += 1
         elif degree and not check_degree(degree, args.min_degree):
             print(f"    → 学历不符，点'不合适'")
-            if not args.dry_run: ax_click("不合适", pid, wid)
+            if not args.dry_run:
+                if not ax_click("不合适", pid, wid):
+                    js_click("不合适", pid, wid)
             stats["unsuitable"] += 1
         else:
             resume_content = ""
