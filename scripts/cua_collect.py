@@ -358,8 +358,11 @@ def main():
         name = contact["name"]
         print(f"\n  [{i+1}/{total}] {name} | {contact['job']}")
 
+        # 点侧边栏, 失败重试一次
         if not click_sidebar(name, pid, wid):
-            print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
+            time.sleep(1)
+            if not click_sidebar(name, pid, wid):
+                print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
         time.sleep(2)  # 等右侧面板加载
 
         panel = read_panel(pid, wid)
@@ -414,9 +417,9 @@ def main():
             stats["collected"] += 1
             print(f"    ✓ 已收集")
 
-        # 关掉简历预览 → Escape，等页面回到聊天视图
+        # 关掉简历预览 → Escape 关闭浮层
         cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
-        time.sleep(1.5)
+        time.sleep(1)
 
     print(f"\n{'=' * 60}")
     print(f"收集完成: ✅{stats['collected']} 🚫{stats['unsuitable']} ⏭{stats['skipped']}")
