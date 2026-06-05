@@ -399,10 +399,12 @@ def main():
                   else f"    → 简历: 等待发送/需同意")
 
             # 换微信
+            wechat_requested = False
             if "换微信" in ax_tree(pid, wid):
                 js_click("换微信", pid, wid); time.sleep(1.5)
                 if "确定与对方交换微信" in ax_tree(pid, wid):
                     js_click("确定", pid, wid)
+                    wechat_requested = True
                     print(f"    → 微信: 已请求交换")
 
             data = {
@@ -410,7 +412,7 @@ def main():
                 "resume_content": resume_content,
                 "resume_filename": panel.get("resume_filename", ""),
                 "has_resume": bool(resume_content),
-                "wechat": "", "has_wechat": False,
+                "wechat": "", "has_wechat": wechat_requested,
                 "status": "collected",
             }
             if not args.dry_run: upsert(conn, data)
