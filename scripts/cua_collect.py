@@ -162,59 +162,55 @@ def js_click(text, pid, wid, last=False):
 
 
 def _click_unfit(pid, wid):
-    """动态获取不合适按钮坐标 → 系统级cliclick点击"""
+    """动态获取不合适按钮坐标 → 系统级cliclick点击; JS失败则用cua像素点击兜底"""
     if not __import__('shutil').which("cliclick"):
         print("    ⚠ cliclick 未安装, 跳过不合适点击. 安装: brew install cliclick")
         return False
-    r = cua("page", json.dumps({
+
+    js = """
+    (function(){
+        var result = {ok: false};
+        var items = document.querySelectorAll('.operate-icon-item');
+        if (items.length >= 9) {
+            var rc = items[8].getBoundingClientRect();
+            result.x = Math.round(rc.left + rc.width/2);
+            result.y = Math.round(rc.top + rc.height/2);
+            result.sy = window.screenY; result.sx = window.screenX;
+            result.ch = window.outerHeight - window.innerHeight;
+            result.ok = true;
+        }
+        return JSON.stringify(result);
+    })()
+    """
+    r = cua("page", json.dumps({"pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js}))
+    d = r if isinstance(r, dict) and r.get("ok") else {}
+
+    if not d.get("ok"):
+        # 兜底: cua像素点击
+        print("    → JS坐标失败, cua像素兜底")
+        cua("click", json.dumps({"pid": pid, "window_id": wid, "x": 1350, "y": 551}))
+        time.sleep(1)
+        cua("click", json.dumps({"pid": pid, "window_id": wid, "x": 1350, "y": 551}))
+        return True
+
+    sc_x = d["x"] + d.get("sx", 0)
+    sc_y = d["y"] + d.get("sy", 0) + d.get("ch", 0)
+    subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"], capture_output=True, text=True, timeout=10)
+    time.sleep(0.8)
+    # 检测下拉 → 开了再点一次
+    check = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": """
-        (function(){
-            var items = document.querySelectorAll('.operate-icon-item');
-            if (items.length >= 9) {
-                var el = items[8];
-                var rc = el.getBoundingClientRect();
-                return JSON.stringify({x: Math.round(rc.left + rc.width/2), y: Math.round(rc.top + rc.height/2)});
-            }
-            return 'not_found';
-        })()
-        """,
+        var items = document.querySelectorAll('.operate-icon-item');
+        if (items.length < 9) return 'no';
+        var nfw = items[8].querySelector('.not-fit-wrap');
+        return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
+        """
     }))
-    try:
-        coord = json.loads(r.get("result", r.get("text", "{}")))
-        cx, cy = coord.get("x", 0), coord.get("y", 0)
-        if cx and cy:
-            # DOM坐标→屏幕坐标: dom + screenY + chrome工具栏高度
-            sy_info = cua("page", json.dumps({
-                "pid": pid, "window_id": wid, "action": "execute_javascript",
-                "javascript": "return JSON.stringify({sy:window.screenY,sx:window.screenX,ch:window.outerHeight-window.innerHeight})",
-            }))
-            sc_x = cx + sy_info.get("sx", 0)
-            sc_y = cy + sy_info.get("sy", 0) + sy_info.get("ch", 0)
-            # 点一次 → 检测是否有下拉弹窗 → 有则再点一次确认
-            subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
-                           capture_output=True, text=True, timeout=10)
-            time.sleep(0.8)
-            check = cua("page", json.dumps({
-                "pid": pid, "window_id": wid, "action": "execute_javascript",
-                "javascript": """
-                var items = document.querySelectorAll('.operate-icon-item');
-                if (items.length < 9) return 'no';
-                var nfw = items[8].querySelector('.not-fit-wrap');
-                return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
-                """
-            }))
-            if isinstance(check, dict) and check.get("result", check.get("text", "")) == "open":
-                subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"],
-                               capture_output=True, text=True, timeout=10)
-            return True
-    except: pass
-    return False
+    if isinstance(check, dict) and str(check.get("result", check.get("text", ""))) == "open":
+        subprocess.run(["cliclick", f"c:{sc_x},{sc_y}"], capture_output=True, text=True, timeout=10)
+    return True
 
-
-def ax_click(text, pid, wid):
-    """AX树找元素点击"""
-    tree = ax_tree(pid, wid)
     for line in tree.split("\n"):
         if text in line and ('AXLink' in line or 'AXButton' in line):
             m = re.search(r'\[(\d+)\]', line)
