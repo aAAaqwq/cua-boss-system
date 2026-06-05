@@ -304,7 +304,7 @@ def upsert(conn, data):
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--limit", type=int, default=10)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--min-degree", default="本科")
     p.add_argument("--schools", type=str)
@@ -314,8 +314,9 @@ def main():
                  else ALL_ELITE_SCHOOLS)
 
     print("=" * 60)
-    print(f"BOSS候选人收集 | {len(whitelist)}所学校 | 最低{args.min_degree}")
-    print(f"模式: {'预览' if args.dry_run else '执行'}")
+    print(f"BOSS候选人收集 | {len(whitelist)}所学校 | 最低{args.min_degree} | "
+          f"上限{args.limit}人")
+    print(f"模式: {'dry-run(操作但不写库+不点不合适)' if args.dry_run else '执行'}")
     print("=" * 60)
 
     if "running" not in str(cua("status")).lower():
@@ -380,25 +381,20 @@ def main():
             stats["unsuitable"] += 1
         else:
             resume_content = ""
-            if not args.dry_run:
-                # ★ 点"附件简历" — BOSS自动处理3种情况
-                # 点"附件简历" — BOSS自动处理3种情况
-                if not ax_click("附件简历", pid, wid):
-                    js_click("附件简历", pid, wid)  # AX失败用JS兜底
-                    time.sleep(3)
-                    resume_content = extract_resume_text(pid, wid)
-                    if resume_content:
-                        print(f"    → 简历: {len(resume_content)} 字")
-                    else:
-                        print(f"    → 简历: 等待发送中")
+            # 点"附件简历" — BOSS自动处理3种情况(dry-run也执行)
+            if not ax_click("附件简历", pid, wid):
+                js_click("附件简历", pid, wid)
+            time.sleep(3)
+            resume_content = extract_resume_text(pid, wid)
+            print(f"    → 简历: {len(resume_content)} 字" if resume_content
+                  else f"    → 简历: 等待发送/需同意")
 
-                # 换微信
-                if "换微信" in ax_tree(pid, wid):
-                    js_click("换微信", pid, wid); time.sleep(1)
-                    if "确定与对方交换微信" in ax_tree(pid, wid):
-                        js_click("确定", pid, wid)
-                        print(f"    → 微信: 已请求交换")
-                        time.sleep(1)
+            # 换微信
+            if "换微信" in ax_tree(pid, wid):
+                js_click("换微信", pid, wid); time.sleep(1.5)
+                if "确定与对方交换微信" in ax_tree(pid, wid):
+                    js_click("确定", pid, wid)
+                    print(f"    → 微信: 已请求交换")
 
             data = {
                 "name": name, "job": job, "school": school, "degree": degree,
