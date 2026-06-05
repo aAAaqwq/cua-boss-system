@@ -360,7 +360,7 @@ def main():
 
         if not click_sidebar(name, pid, wid):
             print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
-        time.sleep(1.5)
+        time.sleep(2)  # 等右侧面板加载
 
         panel = read_panel(pid, wid)
         school = panel["school"] or ""
@@ -384,7 +384,13 @@ def main():
             # 点"附件简历" — BOSS自动处理3种情况(dry-run也执行)
             if not ax_click("附件简历", pid, wid):
                 js_click("附件简历", pid, wid)
-            time.sleep(3)
+            # 等预览加载: 轮询直到出现简历关键词, 再等3秒完全渲染
+            for _ in range(15):
+                time.sleep(1)
+                tree = ax_tree(pid, wid)
+                if '个人简历' in tree or '基本信息' in tree or '个人资料' in tree:
+                    time.sleep(3)  # 等全部文字渲染
+                    break
             resume_content = extract_resume_text(pid, wid)
             print(f"    → 简历: {len(resume_content)} 字" if resume_content
                   else f"    → 简历: 等待发送/需同意")
@@ -408,7 +414,9 @@ def main():
             stats["collected"] += 1
             print(f"    ✓ 已收集")
 
-        # 不需要刷新 — 直接下一轮点侧边栏下一个
+        # 关掉简历预览 → Escape，等页面回到聊天视图
+        cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
+        time.sleep(1.5)
 
     print(f"\n{'=' * 60}")
     print(f"收集完成: ✅{stats['collected']} 🚫{stats['unsuitable']} ⏭{stats['skipped']}")
