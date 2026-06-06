@@ -8,7 +8,127 @@
 
 **零 pip 依赖**，纯 Python 标准库。系统依赖：`cua-driver` CLI、`swiftc`（macOS 自带）、Chrome。
 
-## 触发关键词 → 脚本路由
+## 启动前检查清单
+
+运行任何脚本前，逐项确认以下条件。任何一项不满足都需要先修复。
+
+### 1. 系统依赖
+
+```bash
+# Python 3.10+
+python3 --version
+
+# cua-driver 已安装且在 PATH
+cua-driver status
+
+# swiftc 可用（macOS Xcode 自带）
+swiftc --version
+
+# Chrome 已启动
+pgrep -x "Google Chrome" && echo "✓ Chrome 运行中"
+```
+
+### 2. Chrome 状态
+
+- [ ] Chrome 已打开并**登录** BOSS直聘（zhipin.com）
+- [ ] 登录态未过期（打开 https://www.zhipin.com/web/chat/index 能看到联系人列表）
+- [ ] 目标页面已在标签页中打开：
+  - 打招呼 → 推荐牛人页
+  - 智能沟通 / 收集 → 沟通页（聊天页）
+  - 同步职位 → 职位管理页
+
+### 3. 配置文件
+
+```bash
+# 岗位配置存在
+cat config/jobs.json | python3 -m json.tool > /dev/null && echo "✓ jobs.json"
+
+# 话术模板存在
+cat config/templates.json | python3 -m json.tool > /dev/null && echo "✓ templates.json"
+
+# 系统提示词存在
+test -f config/system_prompt.md && echo "✓ system_prompt.md"
+```
+
+### 4. DeepSeek API（可选，未配置时降级为模板原文）
+
+```bash
+# 检查 .env 文件
+test -f .env && grep -q "DEEPSEEK_API_KEY=sk-" .env && echo "✓ DeepSeek 已配置" || echo "⚠ 未配置，将降级为模板原文"
+```
+
+### 5. 数据库（首次运行自动创建）
+
+```bash
+# 检查 candidates.db 是否存在
+test -f data/candidates.db && echo "✓ DB 已存在 ($(sqlite3 data/candidates.db 'SELECT COUNT(*) FROM candidates') 条记录)" || echo "首次运行将自动创建"
+```
+
+### 6. 快速一键检查
+
+```bash
+python3 -c "
+import subprocess, json
+checks = []
+
+# Python
+v = subprocess.run(['python3','--version'], capture_output=True, text=True).stdout.strip()
+checks.append(('Python 3.10+', '3.1' in v))
+
+# cua-driver
+r = subprocess.run(['cua-driver','status'], capture_output=True, text=True)
+checks.append(('cua-driver', r.returncode == 0))
+
+# Chrome
+r = subprocess.run(['pgrep','-x','Google','Chrome'], capture_output=True)
+checks.append(('Chrome 运行', r.returncode == 0))
+
+# 配置文件
+from pathlib import Path
+checks.append(('jobs.json', Path('config/jobs.json').exists()))
+checks.append(('templates.json', Path('config/templates.json').exists()))
+checks.append(('system_prompt.md', Path('config/system_prompt.md').exists()))
+
+# DeepSeek
+import os
+for line in (Path('.env').read_text().splitlines() if Path('.env').exists() else []):
+    if 'DEEPSEEK_API_KEY=sk-' in line:
+        checks.append(('DeepSeek API', True)); break
+else:
+    checks.append(('DeepSeek API', False))
+
+for name, ok in checks:
+    print(f'  {\"✓\" if ok else \"✗\"} {name}')
+passed = sum(1 for _,ok in checks if ok)
+print(f'\n  {passed}/{len(checks)} 通过')
+"
+```
+
+### 推荐运行顺序
+
+```bash
+# 1. 先 dry-run 预览，确认脚本行为正确
+python scripts/cua_sync_jobs.py             # 预览岗位
+python scripts/cua_sync_jobs.py --write     # 同步到 config/jobs.json
+python scripts/cua_collect.py --dry-run     # 预览收集
+python scripts/cua_chat_loop.py --dry-run   # 预览沟通
+
+# 2. 实际执行（先 collect 再 chat_loop，chat_loop 依赖 collect 写入的 DB 上下文）
+python scripts/cua_collect.py --limit 10
+python scripts/cua_chat_loop.py --limit 20
+```
+
+### 数据库管理
+
+```python
+from app.db import backup_db, clear_db, init_db
+
+backup_db("manual")    # 备份到 data/backups/candidates_YYYYMMDD_HHMMSS_manual.db
+clear_db()             # 自动备份 + 清空 candidates 表（保留表结构）
+init_db()              # 重建/确认表结构
+```
+
+---
 
 | 用户说... | 应执行... |
 |-----------|-----------|
@@ -266,19 +386,22 @@ python scripts/boss_click_buheshi.py
 ```
 cua-boss-system/
 ├── app/
+│   ├── db.py                 # 共享数据库模块(init_db / backup_db / clear_db)
 │   ├── filter_criteria.py    # 名校白名单 + 学校匹配 + 学历判断
-│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 变量替换
+│   └── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知) + 岗位检测
 ├── config/
 │   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 同步）
-│   └── templates.json        # 话术模板（专属→类别→兜底 三层）
+│   ├── templates.json        # 话术模板（专属→类别→兜底 三层）
+│   └── system_prompt.md      # DeepSeek 系统提示词（HR招聘专家人设）
 ├── scripts/
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）
-│   ├── cua_chat_loop.py        # 沟通页批量智能沟通
+│   ├── cua_chat_loop.py        # 沟通页批量智能沟通（阶段感知+uid提取）
 │   ├── cua_collect.py          # 沟通页批量收集（简历+微信→SQLite）
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
 │   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
 ├── data/
-│   └── candidates.db         # 候选人数据（cua_collect.py 输出）
+│   ├── candidates.db         # 候选人数据（collect+chat_loop 共享）
+│   └── backups/              # DB 备份目录（backup_db() 自动创建）
 ├── .env.example              # DeepSeek API 配置模板
 ├── SKILL.md                  # 本文件 — Agent 操作手册
 ├── CLAUDE.md                 # Claude 上下文文件
