@@ -22,18 +22,23 @@ cp .env.example .env
 # 2. 同步职位信息
 python scripts/cua_sync_jobs.py --write
 
-# 3. 预览沟通回复（推荐先 dry-run）
+# 3. 收集候选人（简历+微信→SQLite）
+python scripts/cua_collect.py --limit 10
+
+# 4. 预览沟通回复（推荐先 dry-run）
 python scripts/cua_chat_loop.py --dry-run
 
-# 4. 预览主动打招呼
+# 5. 预览主动打招呼
 python scripts/cua_greeting_loop.py --dry-run
 ```
+
+**推荐流程**: 先 `collect` 收集简历和微信 → 再 `chat_loop` 智能沟通（会读取 collect 写入的 DB 上下文）
 
 ## 脚本
 
 ### `cua_chat_loop.py` — 沟通页批量智能沟通
 
-打开聊天页，逐个查看未读联系人，自动判断并执行：学校/学历筛选 → 不合适 → 岗位检测 → 智能回复。
+打开聊天页，逐个查看联系人，自动判断并执行：学校/学历筛选 → 不合适 → 阶段感知 → 智能回复。
 
 ```bash
 python scripts/cua_chat_loop.py                   # 最多20人
@@ -43,14 +48,27 @@ python scripts/cua_chat_loop.py --min-degree 硕士   # 最低学历
 python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
 ```
 
-**回复流程**：模板匹配 → DeepSeek 结合上下文生成 → 不可用时降级模板原文。
-
-### `cua_greeting_loop.py` — 推荐页批量主动打招呼
-
-```bash
-python scripts/cua_greeting_loop.py --dry-run
-python scripts/cua_greeting_loop.py --limit 5
-python scripts/cua_greeting_loop.py --min-degree 硕士
+**核心流程**:
+```
+scan_contacts() → 逐个 review_one_candidate():
+  ├─ click_contact()       点击联系人 + 提取 DOM data-id → uid
+  ├─ _clear_input()        清空输入框（Cmd+A + Delete，兼容 React）
+  ├─ read_conversation()   读右侧面板 → 学校/学历/聊天历史
+  ├─ _load_candidate_context()  查 DB: has_resume, has_wechat, 历史聊天
+  ├─ _compute_stage()      推算对话阶段:
+  │     ├─ ready_for_interview  (简历+微信都有 → 推动约面试)
+  │     ├─ has_resume_no_wechat (有简历 → 不问简历，聊岗位/微信)
+  │     ├─ has_wechat_no_resume (有微信 → 不问微信，聊岗位细节)
+  │     └─ early_stage         (新对话 → 正常流程)
+  ├─ 学校/学历筛选         不在白名单 → click_buheshi()
+  ├─ generate_reply()      模板匹配 + DeepSeek 生成:
+  │     ├─ system_prompt.md  顶尖 HR 招聘专家人设
+  │     ├─ 合并 DB+AX 聊天历史（最多20条）
+  │     ├─ 岗位模板作提示词方向
+  │     └─ 阶段上下文约束（不重复问已有信息）
+  ├─ _reply_redundant()    兜底检查: 回复还在问简历/微信 → 阶段兜底文本
+  ├─ type_reply()          清空输入框 + cua type 输入 (dry-run 不发送)
+  └─ _save_chat_history()  聊天记录 upsert → candidates.db (按 uid 匹配)
 ```
 
 ### `cua_collect.py` — 沟通页批量收集（简历+微信→SQLite）
@@ -59,6 +77,18 @@ python scripts/cua_greeting_loop.py --min-degree 硕士
 python scripts/cua_collect.py --dry-run
 python scripts/cua_collect.py --limit 10
 python scripts/cua_collect.py --min-degree 硕士
+```
+
+流程: 进入聊天页 → AX树扫描联系人 → 逐个审查(学校+学历筛选) → 提取简历+微信 → upsert 到 candidates.db
+
+**与 chat_loop 共享 DB**: collect 写入 `has_resume`/`has_wechat`/`uid` 等，chat_loop 读取这些字段做阶段感知。
+
+### `cua_greeting_loop.py` — 推荐页批量主动打招呼
+
+```bash
+python scripts/cua_greeting_loop.py --dry-run
+python scripts/cua_greeting_loop.py --limit 5
+python scripts/cua_greeting_loop.py --min-degree 硕士
 ```
 
 ### `cua_sync_jobs.py` — 职位管理页职位信息同步
@@ -117,11 +147,18 @@ templates.json
 **回复流程**：
 ```
 候选人消息
-  → 模板匹配(专属→类别→兜底) 
-    → DeepSeek(模板作提示词 + 岗位上下文 + 对话历史) → AI生成回复
-      ↓ 未配置或失败
-    降级返回模板原文
+  → 模板匹配(专属→类别→兜底) → 命中模板作提示词方向
+  → 加载 DB 上下文(has_resume/has_wechat/历史聊天) → 推算对话阶段
+  → DeepSeek(system_prompt.md + 阶段约束 + 岗位信息 + 聊天历史) → AI生成回复
+    ↓ 未配置或失败
+  → 降级返回模板原文
+    ↓ 回复仍冗余(问已有的东西)
+  → 阶段兜底文本替换
 ```
+
+### `config/system_prompt.md` — DeepSeek 系统提示词
+
+维护招聘官人设、对话推进策略、禁忌事项。修改此文件即时生效，无需改代码。
 
 ### `.env` — DeepSeek API 配置（可选）
 
@@ -137,24 +174,43 @@ DEEPSEEK_API_KEY=sk-your-api-key-here
 
 未配置时自动降级为模板原文回复，不影响正常使用。
 
+## 数据库 (candidates.db)
+
+`app/db.py` 统一管理表结构和迁移，所有脚本共用。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `uid` | TEXT | BOSS 用户唯一标识（DOM data-id），跨脚本匹配键 |
+| `name` | TEXT | 候选人姓名 |
+| `school` / `degree` | TEXT | 学校 / 学历 |
+| `resume_content` | TEXT | 简历全文（collect 写入） |
+| `has_resume` | INTEGER | 是否已有简历 |
+| `wechat` / `has_wechat` | TEXT / INTEGER | 微信号 / 是否已交换 |
+| `chat_history` | TEXT | 聊天记录 JSON（chat_loop 写入） |
+| `status` | TEXT | collected / replied / unsuitable |
+
+**跨脚本协作**: `collect` 写入简历+微信 → `chat_loop` 读取做阶段感知 → 不重复问已有信息
+
 ## 项目结构
 
 ```
 cua-boss-system/
 ├── app/
+│   ├── db.py                 # 共享数据库模块(init_db / DB_PATH)
 │   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
-│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 变量替换
+│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 阶段感知 + 变量替换
 ├── config/
 │   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 同步）
-│   └── templates.json        # 话术模板（专属→类别→兜底 三层）
+│   ├── templates.json        # 话术模板（专属→类别→兜底 三层）
+│   └── system_prompt.md      # DeepSeek 系统提示词（HR 招聘专家人设）
 ├── scripts/
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）
-│   ├── cua_chat_loop.py        # 沟通页批量智能沟通
+│   ├── cua_chat_loop.py        # 沟通页批量智能沟通（阶段感知+上下文合并）
 │   ├── cua_collect.py          # 沟通页批量收集（简历+微信→SQLite）
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
 │   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
 ├── data/
-│   └── candidates.db         # 候选人数据（cua_collect.py 输出）
+│   └── candidates.db         # 候选人数据（collect+chat_loop 共享）
 ├── .env.example              # DeepSeek API 配置模板
 ├── SKILL.md                  # Agent 操作手册
 ├── CLAUDE.md                 # Claude 上下文文件
@@ -163,10 +219,10 @@ cua-boss-system/
 
 ## cua-driver 集成要点
 
-- BOSS 聊天页联系人：`<span class="geek-name">` + JS 点击
+- BOSS 聊天页联系人：`<span class="geek-name">` + JS 点击 + `data-id` 提取 uid
 - 职位描述在 iframe 内：JS 读 `iframe.contentDocument.querySelector('textarea').value`
-- `cua()` 非 JSON 返回截断 200 字：JS 必须返回 `JSON.stringify({text: ...})`
+- `cua()` 非 JSON 返回截断 200 字：JS 必须返回 `JSON.stringify({status, uid})`
 - 页面导航后索引全变：用标题/文本匹配，不用位置索引
-- 连续操作触发风控：每岗间隔 3-7 秒随机
-- Vue 事件代理：原生 CGEvent 点击绕过
+- 连续操作触发风控：每岗间隔 1.5-3 秒随机
+- 输入框清空：Cmd+A + Delete 模拟键盘操作，兼容 React/Vue 框架
 - 所有脚本支持 `--dry-run` 预览模式

@@ -256,16 +256,20 @@ def get_fallback_reply(templates: list[dict], fallback_templates: list[dict] = N
 #   DEEPSEEK_BASE_URL  — 接口地址（默认 https://api.deepseek.com）
 #   DEEPSEEK_MODEL     — 模型名（默认 deepseek-chat）
 
-SYSTEM_PROMPT = (
-    "你是BOSS直聘上的招聘官，正在与候选人对话。\n"
-    "规则：\n"
-    "1. 回复不超过80字，简洁自然\n"
-    "2. 语气友好专业，像真人聊天\n"
-    "3. 严禁索要微信、电话、转账\n"
-    "4. 不承诺 offer\n"
-    "5. 根据对话上下文针对性回复，不要泛泛而谈\n"
-    "6. 参考「建议回复方向」但用自己的话表达，不要照搬"
+SYSTEM_PROMPT_FILE = Path(__file__).parent.parent / "config" / "system_prompt.md"
+
+# 兜底: 文件不存在时使用的最简提示词
+_FALLBACK_PROMPT = (
+    "你是BOSS直聘上的招聘官。\n"
+    "规则：回复不超过80字，简洁自然。根据对话上下文针对性回复，不要泛泛而谈。"
 )
+
+
+def _load_system_prompt() -> str:
+    """从 config/system_prompt.md 加载系统提示词"""
+    if SYSTEM_PROMPT_FILE.exists():
+        return SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
+    return _FALLBACK_PROMPT
 
 
 def _load_env_file() -> None:
@@ -299,27 +303,43 @@ def call_deepseek(
     history: Optional[list[dict]] = None,
     job_context: str = "",
     template_hint: str = "",
+    stage_context: str = "",
 ) -> tuple[Optional[str], str]:
     """调用 DeepSeek API 生成回复
 
     参数:
       template_hint: 匹配到的模板文本，作为「建议回复方向」注入 system prompt
+      stage_context: 对话阶段上下文，告知 DeepSeek 当前阶段和禁忌
     返回: (reply, error_msg)
     """
     cfg = _get_deepseek_config()
     if not cfg["api_key"]:
         return None, "DEEPSEEK_API_KEY not set"
 
-    system = SYSTEM_PROMPT
+    system = _load_system_prompt()
     if job_context:
-        system += f"\n当前招聘的岗位信息: {job_context}"
+        system += f"\n\n---\n当前招聘的岗位信息: {job_context}"
     if template_hint:
         system += f"\n建议回复方向: {template_hint}"
+    if stage_context:
+        system += f"\n对话阶段上下文:\n{stage_context}"
 
     messages = [{"role": "system", "content": system}]
     if history:
-        for turn in history[-10:]:
-            messages.append(turn)
+        for turn in history[-20:]:
+            # 兼容 BOSS 脚本的 role 映射
+            role = turn.get("role", "user")
+            if role == "candidate":
+                role = "user"
+            elif role == "boss":
+                role = "assistant"
+            elif role == "system":
+                # 系统消息转为 assistant 描述，DeepSeek 不支持中间插入 system
+                role = "assistant"
+            content = turn.get("content", "")
+            if role == "assistant" and turn.get("role") == "system":
+                content = f"[系统通知: {content}]"
+            messages.append({"role": role, "content": content})
     messages.append({
         "role": "user",
         "content": f"候选人({candidate_name})说：{candidate_message}",
@@ -364,6 +384,7 @@ def generate_reply(
     fallback_templates: list[dict] = None,
     job_context: str = "",
     job: dict = None,
+    stage_context: str = "",
 ) -> str:
     """生成回复 — 模板匹配 + DeepSeek 智能生成
 
@@ -401,9 +422,12 @@ def generate_reply(
             candidate_name, message, history,
             job_context=job_context,
             template_hint=template_hint or "",
+            stage_context=stage_context,
         )
         if reply:
             return reply
+        if err:
+            print(f"    ⚠ DeepSeek 调用失败: {err}")
 
     # 3. DeepSeek 不可用 — 降级返回模板原文
     if template_hint:

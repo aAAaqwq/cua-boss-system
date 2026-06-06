@@ -22,12 +22,12 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
 from app.chat_reply import check_degree
+from app.db import init_db, DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
 
 SESSION = "boss-collect"
 CHROME = "com.google.Chrome"
 CHAT = "https://www.zhipin.com/web/chat/index"
-DB_PATH = Path(__file__).parent.parent / "data" / "candidates.db"
 
 
 def cua(*args):
@@ -601,44 +601,10 @@ def extract_resume_text(pid, wid, expected_name: str = ""):
 
 
 # ══════════════════════════════════════════════════
-# SQLite
+# SQLite（init_db / upsert）
 # ══════════════════════════════════════════════════
 
-def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS candidates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uid TEXT,
-            name TEXT NOT NULL,
-            job_position TEXT,
-            school TEXT,
-            degree TEXT,
-            resume_content TEXT,
-            resume_filename TEXT,
-            has_resume INTEGER DEFAULT 0,
-            wechat TEXT,
-            has_wechat INTEGER DEFAULT 0,
-            phone TEXT,
-            email TEXT,
-            score INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'collected',
-            notes TEXT,
-            extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    # 兼容旧表: 添加 uid 列（如果不存在）
-    try:
-        conn.execute("ALTER TABLE candidates ADD COLUMN uid TEXT")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
-    # uid 唯一索引（如果不存在）
-    try:
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_uid ON candidates(uid)")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
+# init_db() 已提取到 app/db.py，此处通过 from app.db import init_db 使用
     return conn
 
 
