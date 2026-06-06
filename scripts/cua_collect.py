@@ -370,15 +370,24 @@ def main():
     pid, wid = find_window()
     print(f"✓ pid={pid} wid={wid}")
 
-    # ① 进入聊天页
+    # ① 确保在聊天页（检测+导航+等待）
     print("\n① 进入聊天页...")
-    cua("page", json.dumps({
-        "pid": pid, "window_id": wid, "action": "execute_javascript",
-        "javascript": f'window.location.href = "{CHAT}"',
-    }))
-    for _ in range(20):
-        time.sleep(1)
-        if ax_tree(pid, wid).count("AXStaticText") > 100: break
+    # 先检测: 页面是否已经有联系人列表
+    tree = ax_tree(pid, wid)
+    times = re.findall(r'AXStaticText\s*=\s*"(\d{1,2}:\d{2})"', tree)
+    if len(times) < 5:
+        # 导航+等渲染
+        print("  导航到聊天页...")
+        cua("page", json.dumps({
+            "pid": pid, "window_id": wid, "action": "execute_javascript",
+            "javascript": f'window.location.href = "{CHAT}"',
+        }))
+        for i in range(30):
+            time.sleep(1)
+            times = re.findall(r'AXStaticText\s*=\s*"(\d{1,2}:\d{2})"', ax_tree(pid, wid))
+            if len(times) >= 5:
+                break
+    print(f"  ✓ {len(times)} 个时间标记 ({len(times)}个联系人)")
 
     for pg in range(3):
         cua("scroll", json.dumps({"pid": pid, "window_id": wid,
@@ -388,7 +397,9 @@ def main():
     # ② 扫描
     print("\n② 扫描联系人...")
     contacts = scan_contacts(pid, wid)
-    if not contacts: print("❌ 未找到联系人"); sys.exit(1)
+    if not contacts:
+        print("❌ 未找到联系人, 请确保Chrome在BOSS聊天页 https://www.zhipin.com/web/chat/index")
+        sys.exit(1)
 
     total = len(contacts) if not args.limit else min(len(contacts), args.limit)
     print(f"  {len(contacts)} 个联系人 (处理 {total})")
