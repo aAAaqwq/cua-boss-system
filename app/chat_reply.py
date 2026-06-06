@@ -7,7 +7,7 @@
 
 配置:
   config/jobs.json  — 岗位定义 + 专属话术模板（推荐）
-  config/chat_templates.json — 旧版扁平模板（兼容）
+  config/templates.json — 话术模板（三层：岗位专属 → 类别 → 兜底）
 """
 import json
 import os
@@ -26,83 +26,96 @@ def check_degree(degree: str, min_degree: str = "本科") -> bool:
 
 
 # ══════════════════════════════════════════════════
-# 配置加载 — 岗位模式 (jobs.json) 优先，兼容旧格式
+# 配置加载 — templates.json + jobs.json 双文件模式
+# 兼容旧格式: jobs.json 内嵌 templates（v4-v5）
 # ══════════════════════════════════════════════════
 
-DEFAULT_JOBS_CONFIG = Path(__file__).parent.parent / "config" / "jobs.json"
-DEFAULT_OLD_CONFIG = Path(__file__).parent.parent / "config" / "chat_templates.json"
+CONFIG_DIR = Path(__file__).parent.parent / "config"
+DEFAULT_JOBS_CONFIG = CONFIG_DIR / "jobs.json"
+DEFAULT_TEMPLATES_CONFIG = CONFIG_DIR / "templates.json"
+
+
+def _sort_templates(templates: list[dict]) -> list[dict]:
+    """按 priority 排序模板列表"""
+    return sorted(templates, key=lambda t: t.get("priority", 99))
 
 
 def load_jobs_config(config_path: Optional[str] = None) -> dict:
-    """加载岗位配置
+    """加载岗位配置 + 话术模板
+
+    优先: templates.json + jobs.json（双文件模式）
+    兜底: jobs.json 内嵌 templates（v4-v5 兼容）
 
     返回:
       {
         "jobs": [
           {
-            "id": "ai-fullstack",
-            "title": "AI全栈开发工程师",
-            "requirements": "...",
-            "location": "广州",
-            "salary": "12-18K",
-            "degree": "本科",
-            "templates": [...],
+            "id": "dev", "title": "开发", "category": "tech",
+            "requirements": "...", "location": "广州", "salary": "16K-30K", "degree": "本科",
+            "templates": [...],          # 岗位专属，按 priority 排序
+            "category_templates": [...], # 类别通用 (tech/nontech)
           },
           ...
         ],
         "fallback_templates": [...],
-        "mode": "jobs" | "flat"   # jobs=新格式, flat=旧格式兼容
+        "mode": "templates" | "jobs"
       }
     """
-    path = Path(config_path) if config_path else DEFAULT_JOBS_CONFIG
+    config_dir = Path(config_path).parent if config_path else CONFIG_DIR
+    jobs_path = Path(config_path) if config_path else DEFAULT_JOBS_CONFIG
+    templates_path = config_dir / "templates.json"
 
-    # 优先加载 jobs.json
-    if path.exists():
+    # ── 模式1: templates.json + jobs.json 双文件 ──
+    if templates_path.exists() and jobs_path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if "jobs" in data:
-                result = {
-                    "jobs": data["jobs"],
-                    "fallback_templates": data.get("fallback_templates", []),
-                    "mode": "jobs",
-                }
-                # 确保每个 job 的 templates 按 priority 排序
-                for job in result["jobs"]:
-                    job["templates"] = sorted(
-                        job.get("templates", []),
-                        key=lambda t: t.get("priority", 99),
-                    )
-                result["fallback_templates"] = sorted(
-                    result["fallback_templates"],
-                    key=lambda t: t.get("priority", 99),
-                )
-                return result
-        except (json.JSONDecodeError, KeyError):
-            pass
+            tpl_data = json.loads(templates_path.read_text(encoding="utf-8"))
+            job_data = json.loads(jobs_path.read_text(encoding="utf-8"))
+            tpl_jobs = tpl_data.get("jobs", {})
+            tpl_categories = tpl_data.get("categories", {})
+            fallback = _sort_templates(tpl_data.get("fallback", []))
 
-    # 兜底: 旧格式 chat_templates.json
-    old_path = Path(config_path) if config_path else DEFAULT_OLD_CONFIG
-    if old_path.exists():
-        try:
-            data = json.loads(old_path.read_text(encoding="utf-8"))
-            templates = data.get("templates", [])
+            jobs = []
+            for j in job_data.get("jobs", []):
+                jid = j.get("id", "")
+                category = j.get("category", "")
+                job = dict(j)
+                job["templates"] = _sort_templates(tpl_jobs.get(jid, []))
+                job["category_templates"] = _sort_templates(tpl_categories.get(category, []))
+                jobs.append(job)
+
             return {
-                "jobs": [],
-                "fallback_templates": sorted(
-                    templates, key=lambda t: t.get("priority", 99)
-                ),
-                "mode": "flat",
+                "jobs": jobs,
+                "fallback_templates": fallback,
+                "mode": "templates",
             }
         except (json.JSONDecodeError, KeyError):
             pass
 
-    # 最终兜底
+    # ── 模式2: jobs.json 内嵌 templates（v4-v5 兼容）──
+    if jobs_path.exists():
+        try:
+            data = json.loads(jobs_path.read_text(encoding="utf-8"))
+            if "jobs" in data:
+                jobs = []
+                for job in data["jobs"]:
+                    j = dict(job)
+                    j["templates"] = _sort_templates(job.get("templates", []))
+                    jobs.append(j)
+                return {
+                    "jobs": jobs,
+                    "fallback_templates": _sort_templates(data.get("fallback_templates", [])),
+                    "mode": "jobs",
+                }
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # ── 最终兜底 ──
     return {
         "jobs": [],
         "fallback_templates": [
             {"id": "fallback", "reply": "收到，我稍后看一下回复你～", "match_keywords": [], "priority": 99}
         ],
-        "mode": "flat",
+        "mode": "minimal",
     }
 
 
@@ -138,11 +151,9 @@ def detect_job(
 
         # 关键角色词
         role_keywords = {
-            "ai-fullstack": ["全栈", "开发", "工程师", "python", "react", "fastapi", "agent", "rag", "llm", "后端", "前端"],
-            "tech-intern": ["实习", "intern", "大三", "大二", "大四", "应届", "在校", "暑假", "寒假"],
-            "ai-product-manager": ["产品", "pm", "axure", "需求", "原型", "product", "经理"],
-            "ai-ops-intern": ["运营", "内容", "公众号", "小红书", "社群", "增长", "写作", "排版", "媒体"],
-            "chief-scientist": ["首席", "科学家", "算法", "博士", "研究", "论文", "科研", "学术", "phd"],
+            "dev": ["开发", "工程师", "java", "架构", "后端", "spring", "全栈", "程序员", "coding", "技术"],
+            "annotation": ["获客", "网红", "KOL", "营销", "博主", "达人", "增长", "线索", "流量", "新媒体", "内容运营", "social"],
+            "annotation-2": ["助理", "战略", "咨询", "创业", "项目管理", "MBA", "合伙人", "总助", "chief"],
         }
 
         for kw in role_keywords.get(job["id"], []):
@@ -165,6 +176,31 @@ def detect_job(
 
 
 # ══════════════════════════════════════════════════
+# 模板变量替换 — 将 {salary}/{location} 等替换为 jobs.json 字段
+# ══════════════════════════════════════════════════
+
+TEMPLATE_VARS = ["salary", "location", "title", "requirements", "degree"]
+
+
+def _substitute_vars(reply: str, job: dict = None) -> str:
+    """替换模板中的 {field} 占位符为 job 对应字段值
+
+    >>> _substitute_vars("薪资{salary}", {"salary": "16K-30K"})
+    '薪资16K-30K'
+    """
+    if not job:
+        return reply
+    result = reply
+    for var in TEMPLATE_VARS:
+        placeholder = "{" + var + "}"
+        if placeholder in result:
+            value = job.get(var, "")
+            if value:
+                result = result.replace(placeholder, value)
+    return result
+
+
+# ══════════════════════════════════════════════════
 # 模板匹配
 # ══════════════════════════════════════════════════
 
@@ -172,10 +208,11 @@ def match_template(
     message: str,
     templates: list[dict],
     fallback_templates: list[dict] = None,
+    job: dict = None,
 ) -> Optional[str]:
     """关键词匹配：先在 templates 中找，再在 fallback_templates 中找
 
-    返回匹配到的 reply 文本，或 None
+    返回匹配到的 reply 文本（已替换 {变量}），或 None
     """
     if not message:
         return None
@@ -193,7 +230,7 @@ def match_template(
             continue  # 跳过纯兜底（空关键词）
         for kw in keywords:
             if kw.lower() in msg_lower:
-                return tpl["reply"]
+                return _substitute_vars(tpl["reply"], job)
     return None
 
 
@@ -210,8 +247,14 @@ def get_fallback_reply(templates: list[dict], fallback_templates: list[dict] = N
 
 
 # ══════════════════════════════════════════════════
-# DeepSeek API
 # ══════════════════════════════════════════════════
+# DeepSeek API — 结合模板提示词 + 聊天上下文智能生成回复
+# ══════════════════════════════════════════════════
+
+# API 配置优先级: 环境变量 > .env 文件
+#   DEEPSEEK_API_KEY   — API 密钥（必须）
+#   DEEPSEEK_BASE_URL  — 接口地址（默认 https://api.deepseek.com）
+#   DEEPSEEK_MODEL     — 模型名（默认 deepseek-chat）
 
 SYSTEM_PROMPT = (
     "你是BOSS直聘上的招聘官，正在与候选人对话。\n"
@@ -220,8 +263,34 @@ SYSTEM_PROMPT = (
     "2. 语气友好专业，像真人聊天\n"
     "3. 严禁索要微信、电话、转账\n"
     "4. 不承诺 offer\n"
-    "5. 针对性回复候选人问题，不要泛泛而谈"
+    "5. 根据对话上下文针对性回复，不要泛泛而谈\n"
+    "6. 参考「建议回复方向」但用自己的话表达，不要照搬"
 )
+
+
+def _load_env_file() -> None:
+    """从项目根目录 .env 文件加载环境变量（不覆盖已有值）"""
+    env_path = Path(__file__).parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _get_deepseek_config() -> dict:
+    """获取 DeepSeek 配置，返回 {api_key, base_url, model}"""
+    _load_env_file()
+    return {
+        "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+        "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+    }
 
 
 def call_deepseek(
@@ -229,18 +298,23 @@ def call_deepseek(
     candidate_message: str,
     history: Optional[list[dict]] = None,
     job_context: str = "",
+    template_hint: str = "",
 ) -> tuple[Optional[str], str]:
-    """调用 DeepSeek API 生成回复，返回 (reply, error_msg)"""
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-    if not api_key:
-        return None, "DEEPSEEK_API_KEY not set"
+    """调用 DeepSeek API 生成回复
 
-    base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    参数:
+      template_hint: 匹配到的模板文本，作为「建议回复方向」注入 system prompt
+    返回: (reply, error_msg)
+    """
+    cfg = _get_deepseek_config()
+    if not cfg["api_key"]:
+        return None, "DEEPSEEK_API_KEY not set"
 
     system = SYSTEM_PROMPT
     if job_context:
         system += f"\n当前招聘的岗位信息: {job_context}"
+    if template_hint:
+        system += f"\n建议回复方向: {template_hint}"
 
     messages = [{"role": "system", "content": system}]
     if history:
@@ -252,17 +326,17 @@ def call_deepseek(
     })
 
     payload = json.dumps({
-        "model": model,
+        "model": cfg["model"],
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": 150,
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        f"{base_url}/v1/chat/completions",
+        f"{cfg['base_url']}/v1/chat/completions",
         data=payload,
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {cfg['api_key']}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -286,41 +360,54 @@ def generate_reply(
     candidate_name: str = "",
     history: Optional[list[dict]] = None,
     job_templates: list[dict] = None,
+    category_templates: list[dict] = None,
     fallback_templates: list[dict] = None,
     job_context: str = "",
+    job: dict = None,
 ) -> str:
-    """生成回复
+    """生成回复 — 模板匹配 + DeepSeek 智能生成
 
-    匹配优先级:
-      1. 岗位专属模板 (job_templates)
-      2. 通用模板 (templates，兼容旧格式)
-      3. 兜底模板 (fallback_templates)
-      4. DeepSeek API
-      5. 最终 fallback 文本
+    流程:
+      1. 关键词匹配模板（岗位专属 → 类别通用 → 全局兜底）
+      2. 命中模板 → 用模板文本作为 DeepSeek 提示词，AI 结合上下文生成回复
+      3. DeepSeek 不可用/失败 → 降级返回模板原文
+      4. 无模板匹配 → DeepSeek 仅凭岗位上下文生成
+      5. 全部失败 → 最终兜底文本
 
     参数:
       message: 候选人最新消息
-      templates: 通用模板列表 (旧格式兼容)
-      job_templates: 当前岗位的专属模板
+      templates: 旧版通用模板（兼容）
+      candidate_name: 候选人称呼
+      history: 对话历史 [{"role":"assistant","content":"..."}, ...]
+      job_templates: 当前岗位专属模板
+      category_templates: 当前岗位类别模板 (tech/nontech)
       fallback_templates: 全局兜底模板
       job_context: 岗位描述文本 (传给 DeepSeek)
+      job: 岗位字典 (含 salary/location/title 等，用于模板变量替换)
     """
-    # 1. 岗位专属模板优先
+    # 1. 匹配模板 — 三层 fallback
+    template_hint = None
     if job_templates:
-        reply = match_template(message, job_templates)
+        template_hint = match_template(message, job_templates, job=job)
+    if not template_hint and category_templates:
+        template_hint = match_template(message, category_templates, job=job)
+    if not template_hint:
+        all_fallback = list(fallback_templates or [])
+        template_hint = match_template(message, templates, all_fallback, job=job)
+
+    # 2. 尝试 DeepSeek 智能生成（模板作提示词 + 聊天上下文）
+    if template_hint or True:  # 总是尝试 DeepSeek（如果已配置）
+        reply, err = call_deepseek(
+            candidate_name, message, history,
+            job_context=job_context,
+            template_hint=template_hint or "",
+        )
         if reply:
             return reply
 
-    # 2. 通用模板
-    all_fallback = list(fallback_templates or [])
-    reply = match_template(message, templates, all_fallback)
-    if reply:
-        return reply
-
-    # 3. DeepSeek API
-    reply, err = call_deepseek(candidate_name, message, history, job_context)
-    if reply:
-        return reply
+    # 3. DeepSeek 不可用 — 降级返回模板原文
+    if template_hint:
+        return template_hint
 
     # 4. 最终兜底
     return get_fallback_reply(

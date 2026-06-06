@@ -7,17 +7,18 @@ cua-driver 驱动的 BOSS直聘自动化系统。
 ```
 cua-boss-system/
 ├── app/
-│   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + FilterCriteria
-│   └── chat_reply.py         # 模板匹配 + DeepSeek API + 学历判断 + 岗位检测
+│   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
+│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 变量替换
 ├── config/
 │   ├── jobs.json             # 岗位配置(cua_sync_jobs.py 自动同步)
-│   └── chat_templates.json   # 话术模板(按priority排序)
+│   └── templates.json        # 话术模板(专属→类别→兜底 三层)
 ├── scripts/
-│   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent原生鼠标hover→面板→点击)
-│   ├── cua_chat_loop.py    # 沟通页批量智能沟通(学校筛选+不合适+岗位感知回复)
-│   ├── cua_collect.py      # 沟通页批量收集(简历+微信→SQLite)
-│   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼(学校筛选+学历筛选)
-│   └── cua_sync_jobs.py          # 职位管理页职位信息同步(提取→覆盖写入jobs.json)
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent原生鼠标)
+│   ├── cua_chat_loop.py        # 沟通页批量智能沟通
+│   ├── cua_collect.py          # 沟通页批量收集(简历+微信→SQLite)
+│   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
+│   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
+├── .env.example              # DeepSeek API 配置模板
 ├── SKILL.md
 ├── CLAUDE.md
 └── README.md
@@ -73,15 +74,36 @@ python scripts/cua_sync_jobs.py --limit 3   # 调试
 - requirements: JS直读iframe内textarea(绕过AX树200字截断)
 - salary/degree/location: AXStaticText/AXTextField
 
-## 话术模板 (chat_templates.json)
+## 话术模板 (templates.json)
 
-| priority | id | 关键词 | 回复 |
-|----------|----|--------|------|
-| 1 | greeting_reply | 你好,您好,hi,hello,在吗,请问 | ... |
-| 2 | salary_ask | 薪资,工资,待遇... | ... |
-| 99 | fallback | (空,兜底) | 收到，我稍后看一下回复你～ |
+模板按 `job_id` 组织，每个岗位有专属话术 + 全局 `fallback` 兜底。
 
-策略: 岗位模板 → 通用模板 → DeepSeek API → fallback
+| 岗位 | job_id | 模板数 | 特色场景 |
+|------|--------|--------|----------|
+| 开发 | dev | 10 | 技术栈/经验/架构/远程/到岗 |
+| 营销总监 | annotation | 11 | KPI/KOL/内容渠道/AI背景 |
+| CEO助理 | annotation-2 | 11 | 岗位定位/成长路径/期权/强度 |
+| tech类别 | — | 7 | 技术栈/架构/经验/远程/开源/AI/项目 |
+| nontech类别 | — | 7 | KPI/战略/成长/管理/数据/资源/创业 |
+| 兜底 | fallback | 16 | 通用场景全覆盖 |
+
+匹配策略: 模板匹配(专属→类别→兜底) → 命中则作 DeepSeek 提示词 → AI 结合上下文生成
+                                    ↓ DeepSeek 未配置/失败
+                                  降级返回模板原文
+
+## DeepSeek API 配置 (可选)
+
+```bash
+cp .env.example .env  # 填入 DEEPSEEK_API_KEY
+```
+
+配置优先级: `.env` 文件 → 环境变量。未配置时自动降级为模板原文。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `DEEPSEEK_API_KEY` | (无) | API 密钥，必须 |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | 接口地址 |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | 模型名 |
 
 ## 筛选条件 (filter_criteria.py)
 

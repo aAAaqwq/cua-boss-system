@@ -789,13 +789,17 @@ def review_one_candidate(
     # 检测候选人对应的岗位
     job_id = detect_job(latest_msg, contact.get("job", ""), jobs)
     job_templates = []
+    category_templates = []
     job_context = ""
+    matched_job = None
     if job_id:
         for job in jobs:
             if job["id"] == job_id:
                 job_templates = job.get("templates", [])
+                category_templates = job.get("category_templates", [])
                 job_context = f"{job['title']} | {job['requirements']} | {job['salary']}"
-                print(f"    岗位: {job['title']}")
+                matched_job = job
+                print(f"    岗位: {job['title']} ({job.get('category', '')})")
                 break
 
     reply = generate_reply(
@@ -803,8 +807,10 @@ def review_one_candidate(
         templates=[],  # 旧格式兼容（jobs模式下为空）
         candidate_name=name,
         job_templates=job_templates,
+        category_templates=category_templates,
         fallback_templates=fallback_tpls,
         job_context=job_context,
+        job=matched_job,
     )
     print(f"    → 回复: {reply[:60]}")
 

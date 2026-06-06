@@ -1,6 +1,6 @@
 # cua-boss-system
 
-通过 cua-driver 驱动 Chrome 实现 BOSS直聘自动化。
+通过 cua-driver 驱动 Chrome（macOS Accessibility API）实现 BOSS直聘招聘自动化。
 
 ## 依赖
 
@@ -8,67 +8,32 @@
 |------|------|
 | Python 3.10+ | 零 pip 依赖，纯标准库 |
 | [cua-driver](https://github.com/cua-driver/cua-driver-rs) | macOS Accessibility API 操控 Chrome |
-| swiftc (Xcode) | 编译 CGEvent 原生鼠标工具（首次自动编译到 /tmp/cua_hid） |
+| swiftc (Xcode) | 编译 CGEvent 原生鼠标工具（首次自动编译到 `/tmp/cua_hid`） |
 | Chrome | 需登录 BOSS直聘 |
+| DeepSeek API（可选） | 智能回复，未配置时降级为模板原文 |
 
 ## 快速开始
 
 ```bash
-# 沟通页批量智能沟通（推荐入口）
+# 1. 配置 DeepSeek API Key（可选，推荐）
+cp .env.example .env
+# 编辑 .env 填入 DEEPSEEK_API_KEY
+
+# 2. 同步职位信息
+python scripts/cua_sync_jobs.py --write
+
+# 3. 预览沟通回复（推荐先 dry-run）
 python scripts/cua_chat_loop.py --dry-run
 
-# 推荐页批量主动打招呼
+# 4. 预览主动打招呼
 python scripts/cua_greeting_loop.py --dry-run
-
-# 职位管理页职位信息同步
-python scripts/cua_sync_jobs.py --write
 ```
 
 ## 脚本
 
-### `cua_collect.py` — 沟通页批量收集（简历+微信→SQLite）
-
-打开聊天页 → 扫描所有联系人 → 逐个提取简历和微信：
-
-```bash
-python scripts/cua_collect.py                   # 全部收集
-python scripts/cua_collect.py --dry-run          # 预览（不写库+不点不合适）
-python scripts/cua_collect.py --limit 10         # 限制人数
-python scripts/cua_collect.py --min-degree 硕士   # 最低学历
-```
-
-**简历提取流程**（`click_attachment_resume`）：
-
-| Case | 触发条件 | 行为 |
-|------|---------|------|
-| Case-1 | 对方已发附件简历 | 打开PDF预览 → AX树提取文本（姓名校验通过后入库） |
-| Case-1→在线 | PDF提取不足 | 回退到在线简历文本提取 |
-| Case-2 | 可索取简历 | 点击"确认"索取 → 后续同Case-1 |
-| Case-3 | 附件简历请求中 | 跳过（等待对方确认） |
-| Case-4 | 双方回复后可请求 | 跳过（需先建立沟通） |
-
-**数据存储**：SQLite `data/candidates.db`，按 `uid` 去重更新。
-
-### `boss_click_buheshi.py` — "不合适"按钮点击（共享模块）
-
-`cua_collect.py` 和 `cua_chat_loop.py` 共用此模块触发"不合适"操作。
-
-流程：AX 检测"不合适" → macOS CGEvent 原生鼠标 hover（触发下拉面板）→ AX 轮询等"标为不合适"面板展开 → 原生点击 → AX 验证。
-
-两个脚本在以下场景调用：**学校不在白名单** / **学历不达标**。`--dry-run` 模式下跳过。
-
-```bash
-# 独立调试
-python scripts/boss_click_buheshi.py
-```
-
 ### `cua_chat_loop.py` — 沟通页批量智能沟通
 
-打开聊天页，逐个查看未读联系人，自动判断并执行：
-
-- 学校/学历筛选 → 不符合点"不合适"
-- 已回复判断 → 跳过，避免重复回复
-- 岗位感知话术 → 匹配专属回复模板
+打开聊天页，逐个查看未读联系人，自动判断并执行：学校/学历筛选 → 不合适 → 岗位检测 → 智能回复。
 
 ```bash
 python scripts/cua_chat_loop.py                   # 最多20人
@@ -78,9 +43,9 @@ python scripts/cua_chat_loop.py --min-degree 硕士   # 最低学历
 python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
 ```
 
-### `cua_greeting_loop.py` — 推荐页批量主动打招呼
+**回复流程**：模板匹配 → DeepSeek 结合上下文生成 → 不可用时降级模板原文。
 
-打开推荐牛人页 → 扫描候选人 → 学校/学历筛选 → 逐个点击"打招呼"：
+### `cua_greeting_loop.py` — 推荐页批量主动打招呼
 
 ```bash
 python scripts/cua_greeting_loop.py --dry-run
@@ -88,67 +53,120 @@ python scripts/cua_greeting_loop.py --limit 5
 python scripts/cua_greeting_loop.py --min-degree 硕士
 ```
 
-### `cua_sync_jobs.py` — 职位管理页职位信息同步
+### `cua_collect.py` — 沟通页批量收集（简历+微信→SQLite）
 
-进入职位管理页 → 扫描开放中岗位 → 逐个点编辑提取详情 → 覆盖写入 `config/jobs.json`：
+```bash
+python scripts/cua_collect.py --dry-run
+python scripts/cua_collect.py --limit 10
+python scripts/cua_collect.py --min-degree 硕士
+```
+
+### `cua_sync_jobs.py` — 职位管理页职位信息同步
 
 ```bash
 python scripts/cua_sync_jobs.py             # 预览
-python scripts/cua_sync_jobs.py --write     # 提取+写入
+python scripts/cua_sync_jobs.py --write     # 提取+覆盖写入 config/jobs.json
 ```
 
 ## 配置
 
-### `config/jobs.json` — 岗位配置（cua_sync_jobs.py 自动同步）
+### `config/jobs.json` — 岗位配置
+
+`cua_sync_jobs.py --write` 自动从 BOSS 职位管理页同步生成。手动编辑添加 `category` 字段。
 
 ```json
 {
+  "version": 6,
   "jobs": [
     {
       "id": "dev",
       "title": "开发",
+      "category": "tech",
       "requirements": "需要5-10年的Java开发经验，有架构经验",
       "salary": "16K-30K",
       "degree": "本科",
-      "templates": []
+      "location": "广州天河区..."
     }
-  ],
-  "fallback_templates": [
-    { "match_keywords": [], "reply": "收到，我稍后看一下回复你～", "priority": 99 }
   ]
 }
 ```
 
-### `config/chat_templates.json` — 话术模板
+| 字段 | 说明 |
+|------|------|
+| `id` | 唯一标识，对应 `templates.json` 中的 job_id |
+| `category` | `tech` 技术岗 / `nontech` 非技术岗，决定类别模板 |
+| `title/requirements/salary/degree/location` | 同步自 BOSS，也用作 `{变量}` 占位符值 |
 
-回复策略：模板匹配 → DeepSeek API（需 `DEEPSEEK_API_KEY`）→ fallback。
+### `config/templates.json` — 话术提示词模板
+
+三层匹配结构，支持 `{salary}` `{location}` `{title}` `{requirements}` `{degree}` 占位符。
+
+```
+templates.json
+├── jobs/           # 岗位专属模板（按 job_id）
+│   ├── dev (10个)
+│   ├── annotation (11个)
+│   └── annotation-2 (11个)
+├── categories/     # 类别通用模板（同 category 岗位共享）
+│   ├── tech (7个)      — 技术栈/架构/经验/远程/开源/AI/项目
+│   └── nontech (7个)   — KPI/战略/成长/管理/数据/资源/创业
+└── fallback/       # 全局兜底模板（16个）
+                    — 薪资/简历/面试/地点/福利/试用期/团队/晋升/加班/婉拒/微信...
+```
+
+**回复流程**：
+```
+候选人消息
+  → 模板匹配(专属→类别→兜底) 
+    → DeepSeek(模板作提示词 + 岗位上下文 + 对话历史) → AI生成回复
+      ↓ 未配置或失败
+    降级返回模板原文
+```
+
+### `.env` — DeepSeek API 配置（可选）
+
+```bash
+cp .env.example .env
+```
+
+```ini
+DEEPSEEK_API_KEY=sk-your-api-key-here
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# DEEPSEEK_MODEL=deepseek-chat
+```
+
+未配置时自动降级为模板原文回复，不影响正常使用。
 
 ## 项目结构
 
 ```
 cua-boss-system/
 ├── app/
-│   ├── filter_criteria.py    # 名校白名单 + 学校匹配
-│   └── chat_reply.py         # 模板匹配 + DeepSeek API + 岗位检测
+│   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
+│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 变量替换
 ├── config/
-│   ├── jobs.json             # 岗位配置
-│   └── chat_templates.json   # 话术模板
+│   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 同步）
+│   └── templates.json        # 话术模板（专属→类别→兜底 三层）
 ├── scripts/
-│   ├── boss_click_buheshi.py   # "不合适"点击共享模块
-│   ├── cua_chat_loop.py    # 沟通页批量智能沟通
-│   ├── cua_collect.py      # 沟通页批量收集（简历+微信→SQLite）
-│   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼
-│   └── cua_sync_jobs.py          # 职位管理页职位信息同步
-├── SKILL.md
-├── CLAUDE.md
-└── README.md
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）
+│   ├── cua_chat_loop.py        # 沟通页批量智能沟通
+│   ├── cua_collect.py          # 沟通页批量收集（简历+微信→SQLite）
+│   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
+│   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
+├── data/
+│   └── candidates.db         # 候选人数据（cua_collect.py 输出）
+├── .env.example              # DeepSeek API 配置模板
+├── SKILL.md                  # Agent 操作手册
+├── CLAUDE.md                 # Claude 上下文文件
+└── README.md                 # 本文件
 ```
 
 ## cua-driver 集成要点
 
-- **PDF 预览在 AXWebArea "PDF预览" 中**：文本通过 AXStaticText 逐行暴露，单行可能只有一个字
-- **姓名校验**：`extract_resume_text` 会在 PDF 内容中查找候选人姓名，确认 PDF 归属
-- **PDF 渲染检测**：BOSS PDF 底部有持久 hash token（`[a-f0-9]{20,}~*`），>15s 后自动忽略
-- **文件名提取**：仅从右侧面板区域（element_index 250-760）提取，避免左侧列表污染
-- **在线简历**：PDF 提取失败（如姓名不匹配、图片型 PDF）时自动回退到在线简历文本
-- **所有脚本支持 `--dry-run`** 预览模式，确认无误后再实际执行
+- BOSS 聊天页联系人：`<span class="geek-name">` + JS 点击
+- 职位描述在 iframe 内：JS 读 `iframe.contentDocument.querySelector('textarea').value`
+- `cua()` 非 JSON 返回截断 200 字：JS 必须返回 `JSON.stringify({text: ...})`
+- 页面导航后索引全变：用标题/文本匹配，不用位置索引
+- 连续操作触发风控：每岗间隔 3-7 秒随机
+- Vue 事件代理：原生 CGEvent 点击绕过
+- 所有脚本支持 `--dry-run` 预览模式

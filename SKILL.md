@@ -18,7 +18,7 @@
 | 同步职位、更新岗位、提取岗位信息、刷新职位列表、岗位配置 | `cua_sync_jobs.py` |
 | 不合适、点不合适、buheshi、标为不合适 | `boss_click_buheshi.py` |
 | 白名单、学校筛选、学历筛选、筛选条件 | `app/filter_criteria.py` |
-| 话术、回复模板、聊天模板、自动回复内容 | `app/chat_reply.py` / `config/chat_templates.json` |
+| 话术、回复模板、聊天模板、自动回复内容 | `app/chat_reply.py` / `config/templates.json` |
 | 岗位配置、职位要求、job config | `config/jobs.json` |
 | 干跑、预览、dry run、不实际操作 | 任意脚本加 `--dry-run` |
 | 部署到服务器、crontab、定时任务、自动化排期 | 参考下方定时任务节 |
@@ -88,7 +88,7 @@ python scripts/cua_chat_loop.py --scroll-pages 5
 4. 学历不达标 → 点"不合适"
 5. 符合条件 → 岗位检测 → 专属话术 → 输入回复
 
-**回复策略**：岗位模板匹配 → 通用模板匹配 → DeepSeek API（需 `DEEPSEEK_API_KEY`）→ fallback。
+**回复策略**：模板匹配（专属→类别→兜底）→ DeepSeek 以模板作提示词结合上下文生成 → 未配置/失败时降级模板原文。
 
 **前置条件**：Chrome 已打开 BOSS 直聘沟通页面。
 
@@ -184,28 +184,30 @@ python scripts/boss_click_buheshi.py
 
 ```json
 {
+  "version": 6,
   "jobs": [
     {
       "id": "dev",
       "title": "开发",
+      "category": "tech",
       "requirements": "需要5-10年Java经验",
       "salary": "16K-30K",
       "degree": "本科",
-      "templates": ["有{year}年{tech}经验..."]
+      "location": "广州天河区..."
     }
-  ],
-  "fallback_templates": [
-    {"match_keywords": [], "reply": "收到，我稍后看一下回复你～", "priority": 99}
   ]
 }
 ```
 
-- `cua_sync_jobs.py --write` 自动同步生成
-- `templates` 字段为岗位专属话术，优先级最高
+- `cua_sync_jobs.py --write` 自动同步 title/requirements/salary/degree/location
+- `id` + `category` 手动维护，对应 `templates.json` 中的模板分组
+- 字段值自动作为模板 `{salary}` `{location}` 等占位符的替换源
 
-### `config/chat_templates.json` — 通用话术模板
+### `config/templates.json` — 话术提示词模板
 
-按 `priority` 排序匹配，数字越小优先级越高。`priority: 99` 的 `match_keywords: []` 项为兜底回复。
+三层匹配结构：`jobs`（岗位专属）→ `categories`（tech/nontech 类别通用）→ `fallback`（全局兜底）。
+每层按 `priority` 升序匹配，`priority: 99` + `match_keywords: []` 为最终兜底。
+支持 `{salary}` `{location}` `{title}` 等占位符自动从 `jobs.json` 取值。
 
 ### `app/filter_criteria.py` — 筛选条件
 
@@ -264,20 +266,21 @@ python scripts/boss_click_buheshi.py
 ```
 cua-boss-system/
 ├── app/
-│   ├── filter_criteria.py    # 名校白名单 + 学校匹配 + FilterCriteria
-│   └── chat_reply.py         # 模板匹配 + DeepSeek API + 学历判断
+│   ├── filter_criteria.py    # 名校白名单 + 学校匹配 + 学历判断
+│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 变量替换
 ├── config/
-│   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 生成）
-│   └── chat_templates.json   # 通用话术模板（按 priority 排序）
+│   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 同步）
+│   └── templates.json        # 话术模板（专属→类别→兜底 三层）
 ├── scripts/
-│   ├── boss_click_buheshi.py   # "不合适"点击共享模块
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通
-│   ├── cua_collect.py          # 沟通页批量收集（简历+微信 → SQLite）
-│   ├── cua_greeting_loop.py    # 推荐页批量打招呼
+│   ├── cua_collect.py          # 沟通页批量收集（简历+微信→SQLite）
+│   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
 │   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
 ├── data/
-│   └── candidates.db         # 收集的候选人数据（cua_collect.py 输出）
+│   └── candidates.db         # 候选人数据（cua_collect.py 输出）
+├── .env.example              # DeepSeek API 配置模板
 ├── SKILL.md                  # 本文件 — Agent 操作手册
-├── CLAUDE.md                 # 项目给 Claude 的上下文文件
-└── README.md                 # 人类读的 README
+├── CLAUDE.md                 # Claude 上下文文件
+└── README.md                 # 项目说明
 ```
