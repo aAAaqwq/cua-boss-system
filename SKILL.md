@@ -125,6 +125,7 @@ pgrep -x "Google Chrome" && echo "✓ Chrome 运行中"
 
 - [ ] Chrome 已打开并**登录** BOSS直聘（zhipin.com）
 - [ ] 登录态未过期（打开 https://www.zhipin.com/web/chat/index 能看到联系人列表）
+- [ ] **已开启 "允许来自 Apple 事件的 JavaScript"**（Chrome 菜单栏 → 显示 → 开发者 → ☑️ 允许来自 Apple 事件的 JavaScript）— cua-driver `page` 命令执行 JS 的前提
 - [ ] 目标页面已在标签页中打开：
   - 打招呼 → 推荐牛人页
   - 智能沟通 / 收集 → 沟通页（聊天页）
@@ -143,12 +144,18 @@ cat config/templates.json | python3 -m json.tool > /dev/null && echo "✓ templa
 test -f config/system_prompt.md && echo "✓ system_prompt.md"
 ```
 
-### 4. DeepSeek API（可选，未配置时降级为模板原文）
+### 4. DeepSeek API（必须提前配置，未配置时降级为模板原文，智能回复质量大幅下降）
 
 ```bash
-# 检查 .env 文件
-test -f .env && grep -q "DEEPSEEK_API_KEY=sk-" .env && echo "✓ DeepSeek 已配置" || echo "⚠ 未配置，将降级为模板原文"
+# 复制模板并填入 API Key
+cp .env.example .env
+# 编辑 .env，填入: DEEPSEEK_API_KEY=sk-your-key-here
+
+# 验证
+test -f .env && grep -q "DEEPSEEK_API_KEY=sk-" .env && echo "✓ DeepSeek 已配置" || echo "✗ 未配置，请先执行 cp .env.example .env 并填入密钥"
 ```
+
+> **注意**: DeepSeek 密钥必须**运行前**在 `.env` 中配置好。未配置时脚本不会报错，但所有智能回复会降级为模板原文，回复质量显著下降。建议在首次运行前完成配置。
 
 ### 5. 数据库（首次运行自动创建）
 
