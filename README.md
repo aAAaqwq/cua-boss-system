@@ -26,6 +26,29 @@ python scripts/cua_sync_jobs.py --write
 
 ## 脚本
 
+### `cua_collect.py` — 沟通页批量收集（简历+微信→SQLite）
+
+打开聊天页 → 扫描所有联系人 → 逐个提取简历和微信：
+
+```bash
+python scripts/cua_collect.py                   # 全部收集
+python scripts/cua_collect.py --dry-run          # 预览（不写库+不点不合适）
+python scripts/cua_collect.py --limit 10         # 限制人数
+python scripts/cua_collect.py --min-degree 硕士   # 最低学历
+```
+
+**简历提取流程**（`click_attachment_resume`）：
+
+| Case | 触发条件 | 行为 |
+|------|---------|------|
+| Case-1 | 对方已发附件简历 | 打开PDF预览 → AX树提取文本（姓名校验通过后入库） |
+| Case-1→在线 | PDF提取不足 | 回退到在线简历文本提取 |
+| Case-2 | 可索取简历 | 点击"确认"索取 → 后续同Case-1 |
+| Case-3 | 附件简历请求中 | 跳过（等待对方确认） |
+| Case-4 | 双方回复后可请求 | 跳过（需先建立沟通） |
+
+**数据存储**：SQLite `data/candidates.db`，按 `uid` 去重更新。
+
 ### `boss_click_buheshi.py` — "不合适"按钮点击（共享模块）
 
 `cua_collect.py` 和 `cua_chat_loop.py` 共用此模块触发"不合适"操作。
@@ -120,3 +143,12 @@ cua-boss-system/
 ├── CLAUDE.md
 └── README.md
 ```
+
+## cua-driver 集成要点
+
+- **PDF 预览在 AXWebArea "PDF预览" 中**：文本通过 AXStaticText 逐行暴露，单行可能只有一个字
+- **姓名校验**：`extract_resume_text` 会在 PDF 内容中查找候选人姓名，确认 PDF 归属
+- **PDF 渲染检测**：BOSS PDF 底部有持久 hash token（`[a-f0-9]{20,}~*`），>15s 后自动忽略
+- **文件名提取**：仅从右侧面板区域（element_index 250-760）提取，避免左侧列表污染
+- **在线简历**：PDF 提取失败（如姓名不匹配、图片型 PDF）时自动回退到在线简历文本
+- **所有脚本支持 `--dry-run`** 预览模式，确认无误后再实际执行
