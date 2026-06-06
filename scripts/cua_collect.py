@@ -162,61 +162,22 @@ def js_click(text, pid, wid, last=False):
 
 
 def _click_unfit(pid, wid):
-    """动态获取不合适按钮坐标 → pyautogui系统级点击"""
+    """键盘导航到不合适按钮 → Enter触发 (绕过Vue事件代理, 不依赖JS/坐标)"""
     try:
         import pyautogui
     except ImportError:
         print("    ⚠ pyautogui 未安装, 跳过. pip install pyautogui --break-system-packages")
         return False
 
-    # 一次JS: 坐标+屏幕偏移
-    js = """
-    (function(){
-        var result = {ok: false};
-        var items = document.querySelectorAll('.operate-icon-item');
-        if (items.length >= 9) {
-            var rc = items[8].getBoundingClientRect();
-            result.x = Math.round(rc.left + rc.width/2);
-            result.y = Math.round(rc.top + rc.height/2);
-            result.sy = window.screenY; result.sx = window.screenX;
-            result.ch = window.outerHeight - window.innerHeight;
-            result.ok = true;
-        }
-        return JSON.stringify(result);
-    })()
-    """
-    try:
-        r = cua("page", json.dumps({"pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js}))
-    except:
-        r = {}
-    d = r if isinstance(r, dict) and r.get("ok") else {}
-    if not d.get("ok"):
-        print("    → 坐标获取失败, 跳过")
-        return False
-
-    sc_x = d["x"] + d.get("sx", 0)
-    sc_y = d["y"] + d.get("sy", 0) + d.get("ch", 0)
-    print(f"    → 点不合适 ({sc_x},{sc_y})")
-    pyautogui.click(sc_x, sc_y)
-    time.sleep(3)
-    # 检测下拉 → 打开则再点一次确认
-    try:
-        check = cua("page", json.dumps({
-            "pid": pid, "window_id": wid, "action": "execute_javascript",
-            "javascript": """
-            var items = document.querySelectorAll('.operate-icon-item');
-            if (items.length < 9) return 'no';
-            var nfw = items[8].querySelector('.not-fit-wrap');
-            return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
-            """
-        }))
-        dropdown = str(check.get("result", check.get("text", ""))) if isinstance(check, dict) else ""
-    except:
-        dropdown = "error"
-    if dropdown == "open":
-        print(f"    → 下拉打开, 再点确认")
-        pyautogui.click(sc_x, sc_y)
-        time.sleep(2)
+    # 1. 点聊天输入框区域 → 设置焦点
+    pyautogui.click(800, 720)
+    time.sleep(0.5)
+    # 2. Shift+Tab → 焦点跳到"不合适"按钮
+    cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["shift", "tab"]}))
+    time.sleep(0.3)
+    # 3. Enter触发
+    cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "return"}))
+    time.sleep(2)
     return True
 
 
