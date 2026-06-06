@@ -8,7 +8,59 @@
 
 **零 pip 依赖**，纯 Python 标准库。系统依赖：`cua-driver` CLI、`swiftc`（macOS 自带）、Chrome。
 
-## 启动前检查清单
+## cua-driver 安装
+
+cua-driver 是本项目核心依赖，macOS 原生 `.app` 应用（带 GUI），通过 Accessibility API 操控 Chrome。
+
+### 下载
+
+| 渠道 | 链接 |
+|------|------|
+| **GitHub Releases（推荐）** | https://github.com/trycua/cua/releases |
+| **具体版本** | 找 `cua-driver-rs` 开头的 tag，下载 `.dmg`（如 `cua-driver-rs-v0.5.2`） |
+| **项目主页** | https://github.com/trycua/cua |
+
+### 安装步骤
+
+```bash
+# 1. 下载 .dmg → 打开 → 拖到 /Applications
+#    安装后自动在 ~/.local/bin/ 创建 cua-driver 软链接
+
+# 2. 首次授权 macOS 权限（Accessibility + Screen Recording）
+cua-driver permissions grant
+
+# 3. 安装 Agent Skills（Claude Code / OpenClaw 等）
+cua-driver skills install
+
+# 4. 启动后台服务
+cua-driver serve
+
+# 5. 设置开机自启（可选）
+cua-driver autostart enable
+
+# 6. 后续更新
+cua-driver update --apply
+```
+
+### GUI 功能
+
+`CuaDriver.app` 是 macOS 菜单栏应用：
+- **光标叠加层** — agent 操作时显示虚拟光标，不移动真实鼠标（可用 `--no-overlay` 关闭）
+- **权限管理** — Accessibility / Screen Recording 授权弹窗
+- **daemon 常驻** — 后台运行，CLI 通过 Unix socket 通信
+- **autostart** — 开机自启
+
+### 常用命令
+
+```bash
+cua-driver status          # 检查服务状态
+cua-driver doctor          # 全面诊断
+cua-driver permissions status  # 权限状态
+cua-driver skills status   # Agent skills 安装状态
+cua-driver check-update    # 检查新版本
+```
+
+---
 
 运行任何脚本前，逐项确认以下条件。任何一项不满足都需要先修复。
 
