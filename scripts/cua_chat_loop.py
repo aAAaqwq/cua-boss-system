@@ -28,6 +28,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
 from app.chat_reply import load_jobs_config, generate_reply, check_degree, detect_job
+from scripts.boss_click_buheshi import click_buheshi
 
 SESSION_ID = "boss-chat"
 CHROME_BUNDLE_ID = "com.google.Chrome"
@@ -627,94 +628,7 @@ def read_conversation(pid: int, window_id: int) -> dict:
 # 点击"不合适"
 # ══════════════════════════════════════════════════
 
-def click_unsuitable(pid: int, window_id: int) -> bool:
-    """点击对话右上角的"不合适"按钮
-
-    BOSS直聘聊天页 "不合适" 在右侧对话面板顶部工具栏。
-    AX 树中可能是 AXStaticText 或 AXButton，都尝试点击。
-    先 AX 树 → JS DOM 查找兜底。
-    """
-    # 1. AX 树查找 (AXStaticText 或 AXButton)
-    snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": window_id}))
-    tree = snap.get("tree_markdown", "")
-    if tree:
-        for line in tree.split("\n"):
-            if "不合适" in line:
-                if "已标记" in line:
-                    print("    (已标记不合适)")
-                    return True
-                # 匹配 AXButton 或 AXStaticText
-                m = re.search(r'\[(\d+)\]', line)
-                if m:
-                    idx = int(m.group(1))
-                    # 先尝试 click
-                    r = cua("click", json.dumps({"pid": pid, "window_id": window_id, "element_index": idx}))
-                    if not r.get("error"):
-                        print("    ✓ 已点击'不合适' (AX)")
-                        return True
-                    # AXStaticText 可能不支持 press → 用 JS 点击
-                    r2 = cua("page", json.dumps({
-                        "pid": pid, "window_id": window_id,
-                        "action": "execute_javascript",
-                        "javascript": f"""
-                        (function(){{
-                            var all = document.querySelectorAll('*');
-                            for (var i = 0; i < all.length; i++) {{
-                                if ((all[i].textContent || '').trim() === '不合适') {{
-                                    all[i].click();
-                                    return 'clicked_ax_text';
-                                }}
-                            }}
-                            return 'not_found';
-                        }})()
-                        """,
-                    }))
-                    result_text = " ".join(str(x) for x in r2) if isinstance(r2, list) else str(r2.get("result", r2.get("text", "")))
-                    if "clicked" in result_text:
-                        print("    ✓ 已点击'不合适' (JS via AX)")
-                        return True
-
-    # 2. JS DOM 查找 - 遍历所有元素，找文字是"不合适"的可点击元素
-    r = cua("page", json.dumps({
-        "pid": pid, "window_id": window_id,
-        "action": "execute_javascript",
-        "javascript": """
-        (function(){
-            var all = document.querySelectorAll('button, [role="button"], [class*="btn"], [class*="button"], span, div');
-            for (var i = 0; i < all.length; i++) {
-                var t = (all[i].textContent || '').trim();
-                if (t === '不合适') {
-                    // 向上查找可点击的父元素
-                    var target = all[i];
-                    for (var lvl = 0; lvl < 6; lvl++) {
-                        if (target.onclick || getComputedStyle(target).cursor === 'pointer' ||
-                            target.tagName === 'BUTTON' || target.tagName === 'A') {
-                            target.click();
-                            return 'clicked lvl=' + lvl + ' tag=' + target.tagName;
-                        }
-                        target = target.parentElement;
-                        if (!target) break;
-                    }
-                    all[i].click();
-                    return 'clicked_self';
-                }
-            }
-            return 'not_found';
-        })()
-        """,
-    }))
-    result_text = ""
-    if isinstance(r, list):
-        result_text = " ".join(str(x) for x in r)
-    else:
-        result_text = str(r.get("result", r.get("text", "")))
-
-    if "clicked" in result_text:
-        print(f"    ✓ 已点击'不合适' (JS: {result_text[:50]})")
-        return True
-
-    print("    ⚠ 未找到'不合适'按钮")
-    return False
+# click_unsuitable 已提取到 scripts/boss_click_buheshi.py，通过 click_buheshi() 调用
 
 
 # ══════════════════════════════════════════════════
@@ -849,7 +763,7 @@ def review_one_candidate(
         school_str = school or "未知"
         print(f"    → 学校不符 ({school_str} 不在白名单)，标记'不合适'")
         if not dry_run:
-            click_unsuitable(pid, window_id)
+            click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
         return {"status": "unsuitable", "name": name, "school": school_str}
@@ -858,7 +772,7 @@ def review_one_candidate(
     if degree and not check_degree(degree, min_degree):
         print(f"    → 学历不符 ({degree} < {min_degree})，标记'不合适'")
         if not dry_run:
-            click_unsuitable(pid, window_id)
+            click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
         return {"status": "rejected_degree", "name": name, "degree": degree}

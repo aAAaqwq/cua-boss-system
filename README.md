@@ -8,7 +8,7 @@
 |------|------|
 | Python 3.10+ | 零 pip 依赖，纯标准库 |
 | [cua-driver](https://github.com/cua-driver/cua-driver-rs) | macOS Accessibility API 操控 Chrome |
-| [pyautogui](https://pyautogui.readthedocs.io/) | 系统级鼠标点击 (`pip install pyautogui --break-system-packages`) |
+| swiftc (Xcode) | 编译 CGEvent 原生鼠标工具（首次自动编译到 /tmp/cua_hid） |
 | Chrome | 需登录 BOSS直聘 |
 
 ## 快速开始
@@ -25,6 +25,19 @@ python scripts/cua_sync_jobs.py --write
 ```
 
 ## 脚本
+
+### `boss_click_buheshi.py` — "不合适"按钮点击（共享模块）
+
+`cua_collect.py` 和 `cua_chat_loop.py` 共用此模块触发"不合适"操作。
+
+流程：AX 检测"不合适" → macOS CGEvent 原生鼠标 hover（触发下拉面板）→ AX 轮询等"标为不合适"面板展开 → 原生点击 → AX 验证。
+
+两个脚本在以下场景调用：**学校不在白名单** / **学历不达标**。`--dry-run` 模式下跳过。
+
+```bash
+# 独立调试
+python scripts/boss_click_buheshi.py
+```
 
 ### `cua_chat_loop.py` — 沟通页批量智能沟通
 
@@ -98,7 +111,9 @@ cua-boss-system/
 │   ├── jobs.json             # 岗位配置
 │   └── chat_templates.json   # 话术模板
 ├── scripts/
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块
 │   ├── cua_chat_loop.py    # 沟通页批量智能沟通
+│   ├── cua_collect.py      # 沟通页批量收集（简历+微信→SQLite）
 │   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼
 │   └── cua_sync_jobs.py          # 职位管理页职位信息同步
 ├── CLAUDE.md

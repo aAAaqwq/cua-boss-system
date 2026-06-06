@@ -22,6 +22,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
 from app.chat_reply import check_degree
+from scripts.boss_click_buheshi import click_buheshi
 
 SESSION = "boss-collect"
 CHROME = "com.google.Chrome"
@@ -161,29 +162,7 @@ def js_click(text, pid, wid, last=False):
     return "clicked" in str(r.get("result", r.get("text", "")))
 
 
-def _click_unfit(pid, wid):
-    """AX定位输入框 → 键盘Tab导航到不合适 → Enter触发 (绕过Vue事件代理)"""
-    # 1. AX树找聊天输入框(AXTextArea) → 点击聚焦
-    tree = ax_tree(pid, wid)
-    ta_idx = None
-    for line in tree.split("\n"):
-        if 'AXTextArea' in line:
-            m = re.search(r'\[(\d+)\]', line)
-            if m: ta_idx = int(m.group(1)); break
-    if not ta_idx:
-        print("    → 未找到输入框, 跳过")
-        return False
-
-    cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": ta_idx}))
-    time.sleep(0.5)
-    # 2. Shift+Tab → 焦点跳到"不合适"
-    cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["shift", "tab"]}))
-    time.sleep(0.3)
-    # 3. Enter触发
-    cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "return"}))
-    print(f"    → 键盘触发不合适")
-    time.sleep(2)
-    return True
+# _click_unfit 已提取到 scripts/boss_click_buheshi.py，通过 click_buheshi() 调用
 
 
 def ax_click(text, pid, wid):
@@ -417,12 +396,12 @@ def main():
         if not match_school(school, whitelist):
             print(f"    → 学校不符，点'不合适'")
             if not args.dry_run:
-                _click_unfit(pid, wid)
+                click_buheshi(pid, wid)
             stats["unsuitable"] += 1
         elif degree and not check_degree(degree, args.min_degree):
             print(f"    → 学历不符，点'不合适'")
             if not args.dry_run:
-                _click_unfit(pid, wid)
+                click_buheshi(pid, wid)
             stats["unsuitable"] += 1
         else:
             resume_content = ""
