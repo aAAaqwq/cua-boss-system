@@ -8,7 +8,46 @@
 
 **零 pip 依赖**，纯 Python 标准库。系统依赖：`cua-driver` CLI、`swiftc`（macOS 自带）、Chrome。
 
-## cua-driver 安装
+> **平台限制**: 仅支持 **macOS 12+ (Monterey 及以上)**，不支持 Linux/Windows。cua-driver 依赖 macOS Accessibility API。
+
+## 前置依赖安装
+
+### 1. Python 3.10+
+
+```bash
+# 检查版本
+python3 --version   # 需要 >= 3.10
+
+# 未安装时（macOS）：
+brew install python@3.14
+# 或从 https://www.python.org/downloads/ 下载安装包
+```
+
+### 2. Xcode Command Line Tools（提供 swiftc 编译器）
+
+```bash
+# 安装（弹窗确认，约 1-2 GB）
+xcode-select --install
+
+# 验证
+swiftc --version
+# 输出类似: Swift version 6.x ...
+
+# 注意: 不需要完整 Xcode.app，Command Line Tools 即可
+# swiftc 用于首次运行时自动编译 CGEvent 鼠标工具到 /tmp/cua_hid
+```
+
+### 3. Chrome
+
+```bash
+# 下载安装
+# https://www.google.com/chrome/
+
+# 验证
+pgrep -x "Google Chrome" && echo "✓ Chrome 运行中" || echo "请先启动 Chrome"
+```
+
+### 4. cua-driver
 
 cua-driver 是本项目核心依赖，macOS 原生 `.app` 应用（带 GUI），通过 Accessibility API 操控 Chrome。
 
@@ -19,6 +58,8 @@ cua-driver 是本项目核心依赖，macOS 原生 `.app` 应用（带 GUI），
 | **GitHub Releases（推荐）** | https://github.com/trycua/cua/releases |
 | **具体版本** | 找 `cua-driver-rs` 开头的 tag，下载 `.dmg`（如 `cua-driver-rs-v0.5.2`） |
 | **项目主页** | https://github.com/trycua/cua |
+
+> **架构选择**: 下载页有 `aarch64`（Apple Silicon M1/M2/M3/M4）和 `x86_64`（Intel）两个 `.dmg`，选错会无法启动。在终端运行 `uname -m` 确认架构。
 
 ### 安装步骤
 
