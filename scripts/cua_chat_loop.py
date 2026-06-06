@@ -258,25 +258,23 @@ def navigate_to_chat(pid: int, window_id: int):
 
 
 # ══════════════════════════════════════════════════
-# 扫描未读联系人
+# 扫描所有联系人
 # ══════════════════════════════════════════════════
 
-def scan_unread_contacts(pid: int, window_id: int) -> list[dict]:
-    """扫描左侧未读联系人列表
+def scan_all_contacts(pid: int, window_id: int) -> list[dict]:
+    """扫描左侧联系人列表（全部，非仅未读）
 
     BOSS 聊天页 AX 树结构 (联系人列表区域):
-      [73] "未读"          ← 未读区起始标记
-      [74] "批量"          ← 跳过
-      [75] "1"             ← 未读条数（触发保存前一个联系人）
-      [76] "15:39"         ← 时间
-      [77] "严彭杰"         ← 姓名
-      [78] "AI 技术总监"    ← 职位
-      [79] "消息内容..."    ← 消息预览
+      "沟通" / "全部" / "新招呼" / ... ← 标签栏
+      [73] "1"             ← 未读条数
+      [74] "15:39"         ← 时间
+      [75] "严彭杰"         ← 姓名
+      [76] "AI 技术总监"    ← 职位
+      [77] "消息内容..."    ← 消息预览
 
-    注意: 未读数字出现在联系人信息之前，所以触发保存的是"上一个"联系人。
-    需要在遍历完后额外保存最后一个。
+    联系人在"全部"标签下按时间排列，不限于未读。
     """
-    print("4. 扫描未读联系人...")
+    print("4. 扫描联系人列表...")
 
     snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": window_id, "capture_mode": "ax"}))
     tree = snap.get("tree_markdown", "")
@@ -301,29 +299,35 @@ def scan_unread_contacts(pid: int, window_id: int) -> list[dict]:
         val = val_m.group(1)
         idx = int(idx_m.group(1))
 
-        # 进入未读区域
-        if val == "未读":
+        # 进入联系人列表区域：以"沟通"标签为起始标记
+        if val == "沟通" and not in_contact_list:
             in_contact_list = True
-            continue
-
-        # 跳过无关标记
-        if val in ("批量", "买赠", "帮你问牛人", "不符牛人"):
             continue
 
         if not in_contact_list:
             continue
 
-        # 筛选标签 — 离开未读区域或不是人名
-        if val in ("全部", "新招呼", "沟通中", "已约面", "已获取简历",
-                    "已交换电话", "已交换微信", "收藏", "更多", "全部职位",
-                    "意向沟通", "高学历", "大厂", "牛人"):
+        # 跳过无关标记
+        if val in ("批量", "买赠", "帮你问牛人", "不符牛人", "未读"):
+            continue
+
+        # 筛选标签 — 遇到右侧面板标记则退出列表区域
+        if val in ("全部职位", "意向沟通", "招聘数据", "账号权益",
+                    "面试", "道具", "工具箱", "牛人管理", "互动", "搜索",
+                    "推荐牛人", "职位管理", "直聘企业版", "招聘规范",
+                    "我的客服", "BOSS直聘"):
             in_contact_list = False
+            continue
+
+        # 顶部标签栏 — 跳过但留在列表区域
+        if val in ("全部", "新招呼", "沟通中", "已约面",
+                    "已获取简历", "已交换电话", "已交换微信", "收藏", "更多"):
             continue
         if re.match(r'^\(\d+\)$', val):
             continue
 
         # 未读数字 — 保存上一个联系人
-        if re.match(r'^\d{1,2}$', val) and int(val) > 0:
+        if re.match(r'^\d{1,2}$', val):
             if current_name:
                 contacts.append({
                     "name": current_name,
@@ -370,7 +374,7 @@ def scan_unread_contacts(pid: int, window_id: int) -> list[dict]:
             "job": current_job or "",
             "message": current_msg or "",
             "time": current_time or "",
-            "unread": 1,
+            "unread": 0,
             "ax_index": -1,
         })
 
@@ -383,9 +387,9 @@ def scan_unread_contacts(pid: int, window_id: int) -> list[dict]:
             seen.add(key)
             unique_contacts.append(c)
 
-    print(f"  找到 {len(unique_contacts)} 个未读联系人 (去重后)")
+    print(f"  找到 {len(unique_contacts)} 个联系人 (去重后)")
     for c in unique_contacts[:5]:
-        print(f"    {c['name']:8s} | {c['job']:14s} | 未读{c['unread']}条 | {c['time']} | {c['message'][:30]}")
+        print(f"    {c['name']:8s} | {c['job']:14s} | {c['time']} | {c['message'][:30]}")
     if len(unique_contacts) > 5:
         print(f"    ... 还有 {len(unique_contacts) - 5} 个")
     return unique_contacts
@@ -433,21 +437,159 @@ def click_contact(pid: int, window_id: int, name: str) -> bool:
 
 
 # ══════════════════════════════════════════════════
+# AX 兜底聊天历史提取 — JS 提取失败时使用
+# ══════════════════════════════════════════════════
+
+# AX 树右侧面板中的系统消息（非对话内容）
+_AX_SYSTEM_MSGS = {
+    "简历请求已发送", "请求交换微信已发送", "没有更多了",
+}
+_AX_SYSTEM_PREFIXES = (
+    "牛人", "您可以在线预览", "设置邮箱", "后投递的简历会同时发送到您的邮箱",
+    "复制微信号", "查看微信",
+)
+# AX 树右侧面板中的操作按钮（非对话内容）
+_AX_ACTION_BUTTONS = {
+    "求简历", "换电话", "查看微信", "约面试", "不合适",
+    "在线简历", "附件简历",
+}
+
+
+def _ax_fallback_chat_history(tree: str) -> list[dict]:
+    """JS 提取失败时，从 AX 树推断聊天历史
+
+    AX 树右侧对话面板结构（点击联系人后）:
+      - "沟通职位：" 标记对话区域起点
+      - 日期分割线: "6月3日 沟通的职位-开发"
+      - 系统消息: "牛人XX向您发起了沟通", "简历请求已发送"
+      - [送达]/[已读] → 紧接的上一条是我们发的
+      - 时间戳: "18:30"
+      - 操作按钮: "求简历", "不合适" 等
+      - "设置邮箱" / "全部职位" 等标记右侧面板底部，对话到此为止
+
+    推断规则:
+      1. [送达]/[已读] 之前的文本 → assistant (我们发的)
+      2. 系统消息后的第一条 → user (候选人)
+      3. 连续文本无 [送达] → 候选人发的
+    """
+    if not tree:
+        return []
+
+    # 第一步：从 AX 树收集所有 (index, text)
+    all_nodes = []
+    for line in tree.split("\n"):
+        idx_m = re.search(r"\[(\d+)\]", line)
+        val_m = re.search(r'AXStaticText\s*=\s*"(.+?)"', line)
+        if not idx_m or not val_m:
+            continue
+        idx = int(idx_m.group(1))
+        val = val_m.group(1)
+        if len(val) < 2:
+            continue
+        all_nodes.append((idx, val))
+
+    # 第二步：定位右侧面板对话区域（取最后一个/最高 index 的面板）
+    # AX 树中同一对话面板出现两次（页面虚拟化），当前显示的总是最后出现的
+    # 策略：先收集所有日期分割线位置，取最后一个作为起点，再往后找操作按钮终点
+    date_seps = []
+    for i, (idx, val) in enumerate(all_nodes):
+        if re.match(r"\d+月\d+日\s+沟通的职位", val):
+            date_seps.append(i)
+
+    if not date_seps:
+        return []
+
+    start_idx = date_seps[-1]  # 取最后一个（当前面板）
+    end_idx = None
+    for i in range(start_idx + 1, len(all_nodes)):
+        if all_nodes[i][1] in ("求简历", "换电话", "约面试", "不合适", "发送"):
+            end_idx = i
+            break
+
+    if start_idx is None:
+        return []
+
+    # 如果没找到明确终点，取到操作按钮前的范围
+    if end_idx is None:
+        end_idx = len(all_nodes)
+
+    panel = all_nodes[start_idx:end_idx]
+
+    # 第三步：遍历，推断 role
+    # AX 树中 [送达]/[已读] 出现在消息之前：[已读] → 方便发简历吗（= 我们发的）
+    messages = []
+    next_is_self = False  # 下一句是否是我们发的
+
+    for i, (idx, val) in enumerate(panel):
+
+        # [送达]/[已读] → 标记下一条为我们发的
+        if val in ("[送达]", "[已读]"):
+            next_is_self = True
+            continue
+
+        # 已读（无方括号）
+        if val == "已读":
+            next_is_self = True
+            continue
+
+        # 跳过非对话内容
+        if re.match(r"^\d{1,2}:\d{2}$", val):          # 时间戳
+            continue
+        if re.match(r"\d+月\d+日", val):                 # 日期分割线
+            continue
+        if val in _AX_SYSTEM_MSGS:                        # 系统消息
+            continue
+        if any(val.startswith(p) for p in _AX_SYSTEM_PREFIXES):  # 系统消息前缀
+            continue
+        if "微信号" in val and ("*****" in val or val.endswith("微信号：")):
+            continue
+        if re.match(r"^\d{11}$", val):                    # 电话号码
+            continue
+        if re.match(r"^\d+岁$", val):                     # 年龄
+            continue
+        if re.match(r"^\d{4}\.\d{2}-", val):             # 时间段
+            continue
+        if len(val) <= 12 and "·" in val:                 # 信息标签
+            continue
+        # 跳过"加了"等系统确认
+        if val == "加了":
+            continue
+
+        # 是对话文本（>= 4字）
+        if len(val) >= 4:
+            role = "assistant" if next_is_self else "user"
+            messages.append((role, val))
+            next_is_self = False
+
+    # 去重
+    seen = set()
+    deduped = []
+    for role, content in messages:
+        key = (role, content)
+        if key not in seen:
+            seen.add(key)
+            deduped.append({"role": role, "content": content})
+
+    return deduped[-10:]
+
+
+# ══════════════════════════════════════════════════
 # 读取对话 — 学校 / 学历 / 最新消息 / 是否未回复
 # ══════════════════════════════════════════════════
 
 def read_conversation(pid: int, window_id: int) -> dict:
-    """读取右侧对话面板：学校、学历、最新候选人消息、是否已回复
+    """读取右侧对话面板：学校、学历、聊天历史、最新消息、是否已回复
 
     返回:
       {
         "name": str,
         "school": str | None,
         "degree": str | None,
-        "info_line": str,          # 如 "南京理工大学 · 硕士 · 技术总监"
+        "info_line": str,
+        "chat_history": [{"role": "user"|"assistant", "content": str}, ...],
         "latest_candidate_msg": str,
-        "latest_is_candidate": bool,  # True = 上一句是候选人发的，需要回复
-        "already_replied": bool,      # True = 上一句是我们发的，已回复过
+        "latest_is_candidate": bool,
+        "already_replied": bool,
       }
     """
     result = {
@@ -455,6 +597,7 @@ def read_conversation(pid: int, window_id: int) -> dict:
         "school": None,
         "degree": None,
         "info_line": "",
+        "chat_history": [],
         "latest_candidate_msg": "",
         "latest_is_candidate": False,
         "already_replied": False,
@@ -591,7 +734,15 @@ def read_conversation(pid: int, window_id: int) -> dict:
     except (json.JSONDecodeError, TypeError):
         pass
 
-    # 2c. 合并判断: AX 文本 + JS 发送者信息
+    # 2c. 构建聊天历史：JS 优先，AX 兜底
+    if js_msgs:
+        # JS 成功提取到带 role 的消息
+        result["chat_history"] = js_msgs
+    else:
+        # AX 兜底：从 AX 树推断发送者
+        result["chat_history"] = _ax_fallback_chat_history(tree)
+
+    # 2d. 合并判断: AX 文本 + JS 发送者信息
     # 策略: 从 AX 文本中取最后几条，对照 JS 判断发送者
     candidate_msgs = []
     for text in ax_texts[-8:]:
@@ -613,7 +764,7 @@ def read_conversation(pid: int, window_id: int) -> dict:
         result["latest_is_candidate"] = False
         result["already_replied"] = True
 
-    # 2d. JS 结果修正: 如果 JS 明确找到了候选人消息，优先使用
+    # 2e. JS 结果修正: 如果 JS 明确找到了候选人消息，优先使用
     for msg in reversed(js_msgs):
         if msg.get("role") == "user":
             result["latest_candidate_msg"] = msg["content"]
@@ -754,7 +905,7 @@ def review_one_candidate(
     # c. 判断是否已回复
     if already_replied:
         print(f"    → 已回复过（上一句是我们发的），跳过")
-        return {"status": "already_replied", "name": name}
+        return {"status": "already_replied", "name": name, "chat_history": convo.get("chat_history", [])}
 
     # d. 学校筛选
     school_ok = school and match_school(school, school_whitelist)
@@ -766,7 +917,7 @@ def review_one_candidate(
             click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
-        return {"status": "unsuitable", "name": name, "school": school_str}
+        return {"status": "unsuitable", "name": name, "school": school_str, "chat_history": convo.get("chat_history", [])}
 
     # e. 学历筛选
     if degree and not check_degree(degree, min_degree):
@@ -775,7 +926,7 @@ def review_one_candidate(
             click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
-        return {"status": "rejected_degree", "name": name, "degree": degree}
+        return {"status": "rejected_degree", "name": name, "degree": degree, "chat_history": convo.get("chat_history", [])}
 
     # f. 无候选人消息
     if not latest_msg:
@@ -802,10 +953,12 @@ def review_one_candidate(
                 print(f"    岗位: {job['title']} ({job.get('category', '')})")
                 break
 
+    chat_history = convo.get("chat_history", [])
     reply = generate_reply(
         latest_msg,
         templates=[],  # 旧格式兼容（jobs模式下为空）
         candidate_name=name,
+        history=chat_history,
         job_templates=job_templates,
         category_templates=category_templates,
         fallback_templates=fallback_tpls,
@@ -824,7 +977,76 @@ def review_one_candidate(
     else:
         print(f"    ✓ 已发送")
 
-    return {"status": "replied", "name": name, "school": school, "reply": reply}
+    return {
+        "status": "replied",
+        "name": name,
+        "school": school,
+        "degree": degree,
+        "reply": reply,
+        "chat_history": chat_history,
+    }
+
+
+# ══════════════════════════════════════════════════
+# 聊天记录存库
+# ══════════════════════════════════════════════════
+
+def _save_chat_history(
+    db,
+    contact: dict,
+    result: dict,
+    chat_history: list[dict],
+) -> None:
+    """将聊天记录 upsert 到 candidates.db
+
+    按 name + job 匹配已有记录，找不到则新建。
+    chat_history 存为 JSON 数组: [{"role":"user","content":"..."}, ...]
+    """
+    name = result.get("name") or contact.get("name", "")
+    school = result.get("school") or contact.get("job", "")
+    degree = result.get("degree") or ""
+    job_pos = contact.get("job", "")
+    history_json = json.dumps(chat_history, ensure_ascii=False)
+    status = result.get("status", "unknown")
+
+    # 尝试按 name 更新已有记录
+    cursor = db.execute(
+        "SELECT id, chat_history FROM candidates WHERE name = ?",
+        (name,),
+    )
+    row = cursor.fetchone()
+
+    if row:
+        # 合并：新历史追加到旧历史后（去重）
+        old_history = []
+        try:
+            old_history = json.loads(row[1]) if row[1] else []
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # 用最后一条消息内容去重
+        merged = old_history + chat_history
+        # 去重：按 (role, content) 去重保序
+        seen_keys = set()
+        deduped = []
+        for msg in merged:
+            key = (msg.get("role", ""), msg.get("content", ""))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(msg)
+        merged_json = json.dumps(deduped[-20:], ensure_ascii=False)  # 保留最近20条
+
+        db.execute(
+            "UPDATE candidates SET chat_history = ?, status = ? WHERE id = ?",
+            (merged_json, status, row[0]),
+        )
+    else:
+        # 新建记录
+        db.execute(
+            """INSERT INTO candidates (name, school, degree, job_position, chat_history, status)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, school, degree, job_pos, history_json, status),
+        )
+    db.commit()
 
 
 # ══════════════════════════════════════════════════
@@ -849,8 +1071,6 @@ def main():
     parser.add_argument("--schools", type=str, default=None, help="学校白名单，逗号分隔 (默认ALL_ELITE_SCHOOLS)")
     parser.add_argument("--min-degree", type=str, default="本科", help="最低学历要求 (默认本科)")
     parser.add_argument("--config", type=str, default=None, help="话术模板文件路径")
-    parser.add_argument("--no-scroll", action="store_true", help="不滚动页面加载更多")
-    parser.add_argument("--scroll-pages", type=int, default=3, help="滚动多少页来加载更多联系人 (默认3)")
     args = parser.parse_args()
 
     # 学校白名单
@@ -879,33 +1099,18 @@ def main():
 
     navigate_to_chat(pid, wid)
 
-    # ── 滚动加载更多 ──
-    if not args.no_scroll:
-        for page in range(args.scroll_pages):
-            print(f"  滚动加载 ({page + 1}/{args.scroll_pages})...")
-            cua("scroll", json.dumps({"pid": pid, "window_id": wid, "direction": "down", "amount": 8}))
-            time.sleep(1.5)
-        print()
-
     # ── 扫描 ──
-    contacts = scan_unread_contacts(pid, wid)
+    contacts = scan_all_contacts(pid, wid)
     if not contacts:
-        print("\n✅ 没有未读消息")
+        print("\n✅ 没有联系人")
         return
 
     contacts = contacts[:args.limit]
     print(f"\n5. 逐个审查 ({len(contacts)} 人)...")
 
-    # ── 统计 ──
-    stats = {
-        "replied": 0,
-        "unsuitable": 0,
-        "rejected_degree": 0,
-        "already_replied": 0,
-        "no_message": 0,
-        "send_error": 0,
-        "click_error": 0,
-    }
+    import sqlite3 as _sqlite3
+    db_path = Path(__file__).parent.parent / "data" / "candidates.db"
+    db = _sqlite3.connect(str(db_path))
 
     for i, contact in enumerate(contacts):
         print(f"\n  [{i + 1}/{len(contacts)}] {contact.get('name', '?')} "
@@ -921,24 +1126,22 @@ def main():
         result = review_one_candidate(
             pid, wid, contact, school_whitelist, jobs_config, args.min_degree, args.dry_run
         )
-        stats[result["status"]] = stats.get(result["status"], 0) + 1
+
+        # 存聊天记录到 candidates.db
+        chat_history = result.get("chat_history")
+        if chat_history:
+            _save_chat_history(
+                db, contact, result, chat_history
+            )
 
         # 随机间隔
         if i < len(contacts) - 1:
             delay = random.uniform(1.5, 3)
             time.sleep(delay)
 
-    # ── 汇总 ──
+    db.close()
     print(f"\n{'=' * 60}")
-    print(f"审查完成:")
-    print(f"  ✅ 已回复:     {stats.get('replied', 0)}")
-    print(f"  🚫 不合适:     {stats.get('unsuitable', 0)}")
-    print(f"  📉 学历不符:   {stats.get('rejected_degree', 0)}")
-    print(f"  🔵 已回复过:   {stats.get('already_replied', 0)}")
-    print(f"  ⚠ 无消息:     {stats.get('no_message', 0)}")
-    print(f"  ❌ 发送失败:   {stats.get('send_error', 0)}")
-    total = sum(stats.values())
-    print(f"  ── 总计: {total}")
+    print(f"审查完成，聊天记录已存入 {db_path}")
     print(f"{'=' * 60}")
 
 
