@@ -198,6 +198,25 @@ def _click_unfit(pid, wid):
     sc_y = d["y"] + d.get("sy", 0) + d.get("ch", 0)
     print(f"    → 点不合适 ({sc_x},{sc_y})")
     pyautogui.click(sc_x, sc_y)
+    time.sleep(3)
+    # 检测下拉 → 打开则再点一次确认
+    try:
+        check = cua("page", json.dumps({
+            "pid": pid, "window_id": wid, "action": "execute_javascript",
+            "javascript": """
+            var items = document.querySelectorAll('.operate-icon-item');
+            if (items.length < 9) return 'no';
+            var nfw = items[8].querySelector('.not-fit-wrap');
+            return (nfw && getComputedStyle(nfw).display !== 'none') ? 'open' : 'closed';
+            """
+        }))
+        dropdown = str(check.get("result", check.get("text", ""))) if isinstance(check, dict) else ""
+    except:
+        dropdown = "error"
+    if dropdown == "open":
+        print(f"    → 下拉打开, 再点确认")
+        pyautogui.click(sc_x, sc_y)
+        time.sleep(2)
     return True
 
 
@@ -476,8 +495,9 @@ def main():
 
                 # Case 3: "确定向牛人请求简历"
                 elif '确定向牛人请求简历' in tree or '确认向牛人请求简历' in tree:
-                    js_click("确定", pid, wid)
-                    print(f"    → 简历(Case3): 已请求发送")
+                    js_click("确定", pid, wid, last=True)
+                    print(f"    → 简历(Case3): 已确认请求")
+                    time.sleep(1)
                     time.sleep(1)
                 else:
                     print(f"    → 简历: 未知状态")
