@@ -663,84 +663,41 @@ def read_conversation(pid: int, window_id: int) -> dict:
                 if len(val) > 10 and len(val) < 300:
                     ax_texts.append(val)
 
-    # 2b. JS 判断发送者（靠右=自己发的，靠左=候选人发的）
+    # 2b. JS 补充：获取候选人侧 .message-item 文本（BOSS DOM 中我们发的消息没有这个 class）
+    js_candidate_texts = []
     r = cua("page", json.dumps({
         "pid": pid, "window_id": window_id,
         "action": "execute_javascript",
         "javascript": """
         (function(){
-            // 在 chat-container 中找到所有消息气泡
-            var container = document.querySelector('.chat-container, [class*="chat-con"], [class*="conversation"]');
-            if (!container) {
-                // 找右侧最大的 div
-                var divs = document.querySelectorAll('div');
-                var best = null, bestArea = 0;
-                for (var i = 0; i < divs.length; i++) {
-                    var r = divs[i].getBoundingClientRect();
-                    if (r.x > 350 && r.width > 300) {
-                        var area = r.width * r.height;
-                        if (area > bestArea && divs[i].children.length > 1) {
-                            best = divs[i]; bestArea = area;
-                        }
-                    }
-                }
-                container = best;
-            }
-
-            if (!container) return JSON.stringify({msgs: [], note: 'no_container'});
-
-            // BOSS消息通常在 .chat-message-item 或类似结构中
-            // 自己的消息靠右(class含self/right/mine)，候选人的靠左
-            var items = container.querySelectorAll(
-                '[class*="message"], [class*="bubble"], [class*="msg"], [class*="chat-item"], ' +
-                'li'
-            );
-
-            var msgs = [];
+            var container = document.querySelector('.chat-container-private');
+            if (!container) return JSON.stringify({texts: []});
+            var items = container.querySelectorAll('.message-item');
+            var texts = [];
             for (var i = 0; i < items.length; i++) {
-                var el = items[i];
-                var rect = el.getBoundingClientRect();
-                if (rect.width < 60 || rect.height < 8) continue;
-                var text = (el.textContent || '').trim();
-                if (text.length < 5 || text.length > 400) continue;
-
-                var cls = (el.className || '') + ' ' + (el.parentElement ? el.parentElement.className || '' : '');
-                var isSelf = cls.indexOf('self') >= 0 || cls.indexOf('right') >= 0 ||
-                             cls.indexOf('mine') >= 0 || cls.indexOf('sender') >= 0;
-
-                // 如果class不明确，通过水平位置判断 (x > 800 通常是自己的消息)
-                if (!isSelf && rect.x > 800) isSelf = true;
-
-                msgs.push({
-                    role: isSelf ? 'assistant' : 'user',
-                    content: text
-                });
+                var text = (items[i].textContent || '').trim();
+                if (text.length >= 4 && text.length <= 500) texts.push(text);
             }
-
-            return JSON.stringify({msgs: msgs.slice(-10)});
+            return JSON.stringify({texts: texts.slice(-10)});
         })()
         """,
     }))
 
-    js_msgs = []
     try:
-        msg_text = ""
-        if isinstance(r, list):
-            msg_text = " ".join(str(x) for x in r)
-        else:
-            msg_text = str(r.get("result", r.get("text", "")))
-        parsed = json.loads(msg_text.strip().strip('"'))
-        js_msgs = parsed.get("msgs", [])
-    except (json.JSONDecodeError, TypeError):
+        if isinstance(r, dict) and "texts" in r:
+            js_candidate_texts = r["texts"]
+    except Exception:
         pass
 
-    # 2c. 构建聊天历史：JS 优先，AX 兜底
-    if js_msgs:
-        # JS 成功提取到带 role 的消息
-        result["chat_history"] = js_msgs
-    else:
-        # AX 兜底：从 AX 树推断发送者
-        result["chat_history"] = _ax_fallback_chat_history(tree)
+    # 2c. 构建聊天历史：AX 优先（能区分双方），JS 补充候选人文本
+    ax_history = _ax_fallback_chat_history(tree)
+    if ax_history:
+        result["chat_history"] = ax_history
+    elif js_candidate_texts:
+        # AX 失败时，JS 候选人文本作为纯 user 消息
+        result["chat_history"] = [
+            {"role": "user", "content": t} for t in js_candidate_texts
+        ]
 
     # 2d. 合并判断: AX 文本 + JS 发送者信息
     # 策略: 从 AX 文本中取最后几条，对照 JS 判断发送者
