@@ -162,21 +162,26 @@ def js_click(text, pid, wid, last=False):
 
 
 def _click_unfit(pid, wid):
-    """键盘导航到不合适按钮 → Enter触发 (绕过Vue事件代理, 不依赖JS/坐标)"""
-    try:
-        import pyautogui
-    except ImportError:
-        print("    ⚠ pyautogui 未安装, 跳过. pip install pyautogui --break-system-packages")
+    """AX定位输入框 → 键盘Tab导航到不合适 → Enter触发 (绕过Vue事件代理)"""
+    # 1. AX树找聊天输入框(AXTextArea) → 点击聚焦
+    tree = ax_tree(pid, wid)
+    ta_idx = None
+    for line in tree.split("\n"):
+        if 'AXTextArea' in line:
+            m = re.search(r'\[(\d+)\]', line)
+            if m: ta_idx = int(m.group(1)); break
+    if not ta_idx:
+        print("    → 未找到输入框, 跳过")
         return False
 
-    # 1. 点聊天输入框区域 → 设置焦点
-    pyautogui.click(800, 720)
+    cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": ta_idx}))
     time.sleep(0.5)
-    # 2. Shift+Tab → 焦点跳到"不合适"按钮
+    # 2. Shift+Tab → 焦点跳到"不合适"
     cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["shift", "tab"]}))
     time.sleep(0.3)
     # 3. Enter触发
     cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "return"}))
+    print(f"    → 键盘触发不合适")
     time.sleep(2)
     return True
 
