@@ -116,6 +116,7 @@ cua-boss-system/
 │   ├── cua_collect.py      # 沟通页批量收集（简历+微信→SQLite）
 │   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼
 │   └── cua_sync_jobs.py          # 职位管理页职位信息同步
+├── SKILL.md
 ├── CLAUDE.md
 └── README.md
 ```

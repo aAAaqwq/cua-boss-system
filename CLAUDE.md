@@ -13,11 +13,12 @@ cua-boss-system/
 │   ├── jobs.json             # 岗位配置(cua_sync_jobs.py 自动同步)
 │   └── chat_templates.json   # 话术模板(按priority排序)
 ├── scripts/
-│   ├── boss_click_buheshi.py   # "不合适"点击共享模块(6策略降级)
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent原生鼠标hover→面板→点击)
 │   ├── cua_chat_loop.py    # 沟通页批量智能沟通(学校筛选+不合适+岗位感知回复)
 │   ├── cua_collect.py      # 沟通页批量收集(简历+微信→SQLite)
 │   ├── cua_greeting_loop.py  # 推荐页批量主动打招呼(学校筛选+学历筛选)
 │   └── cua_sync_jobs.py          # 职位管理页职位信息同步(提取→覆盖写入jobs.json)
+├── SKILL.md
 ├── CLAUDE.md
 └── README.md
 ```
