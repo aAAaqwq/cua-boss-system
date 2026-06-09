@@ -2,15 +2,25 @@
 
 通过 cua-driver 驱动 Chrome（macOS Accessibility API）实现 BOSS直聘招聘自动化。
 
+> **平台限制**: 仅支持 **macOS 12+ (Monterey 及以上)**，不支持 Linux/Windows。cua-driver 依赖 macOS Accessibility API。
+>
+> **测试环境**: Python 3.14.5 / cua-driver 0.5.1 / Swift 6.3.2 / Chrome 148 / macOS 26.5
+
 ## 依赖
 
-| 依赖 | 说明 |
-|------|------|
-| Python 3.10+ | 零 pip 依赖，纯标准库 |
-| [cua-driver](https://github.com/cua-driver/cua-driver-rs) | macOS Accessibility API 操控 Chrome |
-| swiftc (Xcode) | 编译 CGEvent 原生鼠标工具（首次自动编译到 `/tmp/cua_hid`） |
-| Chrome | 需登录 BOSS直聘 |
-| DeepSeek API（可选） | 智能回复，未配置时降级为模板原文 |
+| 依赖 | 版本要求 | 说明 |
+|------|----------|------|
+| Python | ≥ 3.10 | 零 pip 依赖，纯标准库 |
+| [cua-driver](https://github.com/cua-driver/cua-driver-rs) | ≥ 0.5.x | macOS `.app`，通过 Accessibility API 操控 Chrome |
+| Xcode Command Line Tools (swiftc) | 任意 | 首次运行自动编译 CGEvent 鼠标工具到 `/tmp/cua_hid` |
+| Google Chrome | 任意 | 需登录 BOSS直聘 |
+| DeepSeek API | — | 智能回复（必须提前配置，未配置时降级为模板原文） |
+
+### Chrome 必要设置
+
+启动 Chrome 前确保开启：**菜单栏 → 显示 → 开发者 → ☑️ 允许来自 Apple 事件的 JavaScript**
+
+这是 cua-driver `page` 命令执行 JS 的前提，缺失会导致职位同步和 uid 提取失败。
 
 ## 快速开始
 
@@ -98,6 +108,21 @@ python scripts/cua_sync_jobs.py             # 预览
 python scripts/cua_sync_jobs.py --write     # 提取+覆盖写入 config/jobs.json
 ```
 
+### `boss_click_buheshi.py` — "不合适"点击模块（调试/独立使用）
+
+CGEvent 原生鼠标 hover + click，绕过 BOSS 的 Vue 事件系统。已被 `cua_collect.py` 和 `cua_chat_loop.py` 作为共享模块 import 使用。
+
+```bash
+python scripts/boss_click_buheshi.py    # 独立调试
+```
+
+### `query_db.py` — 数据库查询/统计/导出
+
+```bash
+python scripts/query_db.py              # 统计概览
+python scripts/query_db.py --list       # 列出全部候选人
+python scripts/query_db.py --export candidates.csv  # 导出 CSV
+
 ## 配置
 
 ### `config/jobs.json` — 岗位配置
@@ -160,10 +185,10 @@ templates.json
 
 维护招聘官人设、对话推进策略、禁忌事项。修改此文件即时生效，无需改代码。
 
-### `.env` — DeepSeek API 配置（可选）
+### `.env` — DeepSeek API 配置（必须提前配置）
 
 ```bash
-cp .env.example .env
+cp .env.example .env  # 编辑 .env 填入 DEEPSEEK_API_KEY
 ```
 
 ```ini
@@ -172,7 +197,7 @@ DEEPSEEK_API_KEY=sk-your-api-key-here
 # DEEPSEEK_MODEL=deepseek-chat
 ```
 
-未配置时自动降级为模板原文回复，不影响正常使用。
+未配置时不会报错，但所有智能回复降级为模板原文，回复质量显著下降。
 
 ## 数据库 (candidates.db)
 
@@ -208,7 +233,8 @@ cua-boss-system/
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通（阶段感知+上下文合并）
 │   ├── cua_collect.py          # 沟通页批量收集（简历+微信→SQLite）
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
-│   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
+│   ├── cua_sync_jobs.py        # 职位管理页同步岗位信息
+│   └── query_db.py             # 数据库查询/统计/CSV导出
 ├── data/
 │   └── candidates.db         # 候选人数据（collect+chat_loop 共享）
 ├── .env.example              # DeepSeek API 配置模板

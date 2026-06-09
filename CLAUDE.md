@@ -19,7 +19,8 @@ cua-boss-system/
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通(阶段感知+uid提取+上下文合并)
 │   ├── cua_collect.py          # 沟通页批量收集(简历+微信→SQLite)
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
-│   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
+│   ├── cua_sync_jobs.py        # 职位管理页同步岗位信息
+│   └── query_db.py             # 数据库查询/统计/CSV导出
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
@@ -30,11 +31,13 @@ cua-boss-system/
 
 ## 依赖
 
+- **平台**: macOS 12+ (Monterey 及以上)，不支持 Linux/Windows
 - Python 3.10+（纯标准库）
-- `cua-driver` CLI
+- `cua-driver` CLI (≥ 0.5.x)
 - `swiftc`（首次运行自动编译 CGEvent 鼠标工具 `/tmp/cua_hid`）
 - Chrome（需登录 BOSS直聘）
-- DeepSeek API（可选，未配置时降级为模板原文）
+- **Chrome 设置**: 菜单栏 → 显示 → 开发者 → ☑️ 允许来自 Apple 事件的 JavaScript
+- DeepSeek API（必须提前配置，未配置时降级为模板原文，回复质量显著下降）
 
 ## 脚本
 

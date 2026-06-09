@@ -9,6 +9,8 @@
 **零 pip 依赖**，纯 Python 标准库。系统依赖：`cua-driver` CLI、`swiftc`（macOS 自带）、Chrome。
 
 > **平台限制**: 仅支持 **macOS 12+ (Monterey 及以上)**，不支持 Linux/Windows。cua-driver 依赖 macOS Accessibility API。
+>
+> **当前测试环境**: Python 3.14.5 / cua-driver 0.5.1 / Swift 6.3.2 / Chrome 148 / macOS 26.5
 
 ## 前置依赖安装
 
@@ -19,7 +21,7 @@
 python3 --version   # 需要 >= 3.10
 
 # 未安装时（macOS）：
-brew install python@3.14
+brew install python@3.14    # 当前测试通过版本，≥ 3.10 即可
 # 或从 https://www.python.org/downloads/ 下载安装包
 ```
 
@@ -47,9 +49,9 @@ swiftc --version
 pgrep -x "Google Chrome" && echo "✓ Chrome 运行中" || echo "请先启动 Chrome"
 ```
 
-### 4. cua-driver
+### 4. cua-driver (≥ 0.5.x)
 
-cua-driver 是本项目核心依赖，macOS 原生 `.app` 应用（带 GUI），通过 Accessibility API 操控 Chrome。
+cua-driver 是本项目核心依赖，macOS 原生 `.app` 应用（带 GUI），通过 Accessibility API 操控 Chrome。当前测试版本 `0.5.1`。
 
 ### 下载
 
@@ -237,6 +239,7 @@ init_db()              # 重建/确认表结构
 | 收集简历、提取微信、收集候选人、批量收集、捞简历、采集 | `cua_collect.py` |
 | 同步职位、更新岗位、提取岗位信息、刷新职位列表、岗位配置 | `cua_sync_jobs.py` |
 | 不合适、点不合适、buheshi、标为不合适 | `boss_click_buheshi.py` |
+| 查数据库、导出、候选人列表、查询候选、数据导出 | `query_db.py` |
 | 白名单、学校筛选、学历筛选、筛选条件 | `app/filter_criteria.py` |
 | 话术、回复模板、聊天模板、自动回复内容 | `app/chat_reply.py` / `config/templates.json` |
 | 岗位配置、职位要求、job config | `config/jobs.json` |
@@ -498,7 +501,8 @@ cua-boss-system/
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通（阶段感知+uid提取）
 │   ├── cua_collect.py          # 沟通页批量收集（简历+微信→SQLite）
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
-│   └── cua_sync_jobs.py        # 职位管理页同步岗位信息
+│   ├── cua_sync_jobs.py        # 职位管理页同步岗位信息
+│   └── query_db.py             # 数据库查询/统计/CSV导出CLI工具
 ├── data/
 │   ├── candidates.db         # 候选人数据（collect+chat_loop 共享）
 │   └── backups/              # DB 备份目录（backup_db() 自动创建）
