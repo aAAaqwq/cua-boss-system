@@ -30,12 +30,39 @@ CHROME = "com.google.Chrome"
 CHAT = "https://www.zhipin.com/web/chat/index"
 
 
+# cua-driver 文本响应中的错误特征
+_CUA_ERROR_PATTERNS = [
+    "not found in cache", "No cached", "Call get_window_state first",
+    "failed", "error", "Error", "invalid", "Invalid",
+    "could not", "Could not", "unable", "Unable",
+    "denied", "permission", "timeout", "not found",
+]
+
+
 def cua(*args):
+    """调用 cua-driver CLI。返回 dict，失败时带 "error" 键。"""
     cmd = ["cua-driver"] + list(args)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if r.returncode != 0: return {}
-    try: return json.loads(r.stdout.strip() or "{}")
-    except json.JSONDecodeError: return {"text": (r.stdout or "")[:200]}
+    stdout = r.stdout.strip()
+    stderr = r.stderr.strip()
+
+    if r.returncode != 0:
+        err_msg = stderr or stdout or f"exit code {r.returncode}"
+        return {"error": err_msg[:300]}
+
+    if not stdout:
+        return {}
+
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        pass
+
+    text = stdout[:300]
+    for pat in _CUA_ERROR_PATTERNS:
+        if pat.lower() in text.lower():
+            return {"error": text}
+    return {"text": text}
 
 
 def ax_tree(pid, wid):
@@ -92,10 +119,14 @@ def scan_contacts(pid, wid):
         if not m: continue
         val = m.group(1)
 
+        # 提取元素索引
+        idx_m = re.search(r'\[(\d+)\]', line)
+        elem_idx = int(idx_m.group(1)) if idx_m else None
+
         # 时间/日期: 14:19 | 昨天 | 前天 | 06-04 | 06月04日
         if re.match(r'^(?:\d{1,2}:\d{2}|昨天|前天|\d{1,2}-\d{1,2}|\d{2}月\d{2}日)$', val):
             if cur_name:
-                contacts.append({"name": cur_name, "job": cur_job or "", "time": cur_time or ""})
+                contacts.append({"name": cur_name, "job": cur_job or "", "time": cur_time or "", "idx": cur_idx})
             cur_name = cur_job = None
             cur_time = val
             continue
@@ -112,6 +143,7 @@ def scan_contacts(pid, wid):
                     and not re.search(r'\.(docx?|pdf)$', val)
                     and not re.match(r'^\d{1,2}:\d{2}$', val)):
                 cur_name = val
+                cur_idx = elem_idx
                 continue
 
         if cur_name and not cur_job:
@@ -130,7 +162,7 @@ def scan_contacts(pid, wid):
                 continue
 
     if cur_name:
-        contacts.append({"name": cur_name, "job": cur_job or "", "time": cur_time or ""})
+        contacts.append({"name": cur_name, "job": cur_job or "", "time": cur_time or "", "idx": cur_idx})
 
     # 去重 (同名只保留第一个)
     seen, unique = set(), []
@@ -176,8 +208,18 @@ def get_contact_uid(name, pid, wid):
     return None
 
 
+def click_sidebar_ax(idx: int, pid: int, wid: int) -> bool:
+    """AX 点击侧边栏联系人（替代 JS 方案，避免 AppleScript 桥接问题）"""
+    result = cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": idx}))
+    err = result.get("error", "")
+    if err:
+        print(f"      AX点击失败: {err}")
+        return False
+    return True
+
+
 def click_sidebar(name, pid, wid):
-    """JS点侧边栏联系人，同时提取 data-id 作为 UID"""
+    """JS点侧边栏联系人，同时提取 data-id 作为 UID（保留作为 fallback）"""
     safe = name.replace("'", "\\'")
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
@@ -206,11 +248,12 @@ def click_sidebar(name, pid, wid):
         }})()
         """,
     }))
+    # 如果 JS 执行失败（返回 error），说明 AppleScript 桥接不可用
+    if isinstance(r, dict) and r.get("error"):
+        return False, None
     try:
-        # r 是 cua-driver 直接返回的 JSON: {status, uid}
         if isinstance(r, dict) and "status" in r:
             return r.get("status") == "clicked", r.get("uid")
-        # fallback: 纯文本返回值 (如 "clicked", "not_found")
         return "clicked" in str(r), None
     except (TypeError, AttributeError):
         return False, None
@@ -605,15 +648,10 @@ def extract_resume_text(pid, wid, expected_name: str = ""):
 # ══════════════════════════════════════════════════
 
 # init_db() 已提取到 app/db.py，此处通过 from app.db import init_db 使用
-    return conn
 
 
 def upsert(conn, data):
-    """按 uid 唯一键更新或插入。uid=None 时 fallback 到 (name, job_position)。
-
-    已存在 → 只更新变化的字段，保留原有 id。
-    不存在 → 插入新行。
-    """
+    """按 uid 唯一键更新或插入。uid=None 时 fallback 到 INSERT OR REPLACE。"""
     uid = data.get("uid")
     if uid:
         conn.execute("""
@@ -647,25 +685,12 @@ def upsert(conn, data):
             data.get("notes",""), datetime.now().isoformat(),
         ))
     else:
-        # 无 uid: fallback 到旧逻辑 (name, job_position)
+        # 无 uid: 直接插入（无唯一键可冲突）
         conn.execute("""
             INSERT INTO candidates
                 (name, job_position, school, degree, resume_content, resume_filename,
                  has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(name, job_position) DO UPDATE SET
-                school = excluded.school,
-                degree = excluded.degree,
-                resume_content = CASE WHEN excluded.resume_content != '' THEN excluded.resume_content ELSE candidates.resume_content END,
-                resume_filename = CASE WHEN excluded.resume_filename != '' THEN excluded.resume_filename ELSE candidates.resume_filename END,
-                has_resume = CASE WHEN excluded.has_resume = 1 THEN 1 ELSE candidates.has_resume END,
-                wechat = CASE WHEN excluded.wechat != '' THEN excluded.wechat ELSE candidates.wechat END,
-                has_wechat = CASE WHEN excluded.has_wechat = 1 THEN 1 ELSE candidates.has_wechat END,
-                phone = CASE WHEN excluded.phone != '' THEN excluded.phone ELSE candidates.phone END,
-                email = CASE WHEN excluded.email != '' THEN excluded.email ELSE candidates.email END,
-                status = excluded.status,
-                notes = excluded.notes,
-                extracted_at = CURRENT_TIMESTAMP
         """, (
             data.get("name",""), data.get("job",""),
             data.get("school",""), data.get("degree",""),
@@ -742,14 +767,20 @@ def main():
         name = contact["name"]
         print(f"\n  [{i+1}/{min(len(contacts), args.limit)}] {name} | {contact['job']}")
 
-        # 点侧边栏, 失败重试一次; 同时提取 UID
+        # 点侧边栏: 优先用 AX 点击（索引来自 scan_contacts），失败再试 JS
         contact_uid = None
-        clicked, contact_uid = click_sidebar(name, pid, wid)
+        clicked = False
+        contact_idx = contact.get("idx")
+        if contact_idx:
+            clicked = click_sidebar_ax(contact_idx, pid, wid)
         if not clicked:
-            time.sleep(1)
+            # AX 失败 → JS fallback
             clicked, contact_uid = click_sidebar(name, pid, wid)
             if not clicked:
-                print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
+                time.sleep(1)
+                clicked, contact_uid = click_sidebar(name, pid, wid)
+        if not clicked:
+            print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
         if contact_uid:
             print(f"    uid: {contact_uid}")
         time.sleep(2)  # 等右侧面板加载
