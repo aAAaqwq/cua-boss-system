@@ -35,18 +35,45 @@ LIMIT_KEYWORDS = [
 ]
 
 
+# cua-driver 文本响应中的错误特征（非 JSON 返回时检测）
+_CUA_ERROR_PATTERNS = [
+    "not found in cache", "No cached", "Call get_window_state first",
+    "failed", "error", "Error", "invalid", "Invalid",
+    "could not", "Could not", "unable", "Unable",
+    "denied", "permission", "timeout", "not found",
+]
+
+
 def cua(*args: str) -> dict:
+    """调用 cua-driver CLI。返回 dict，失败时带 "error" 键。
+
+    注意：cua-driver 多数命令返回纯文本（非 JSON），不能仅靠 returncode 判断成败。
+    """
     cmd = ["cua-driver"] + list(args)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        return {}
     stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+
+    # 非零退出码 = 硬失败
+    if result.returncode != 0:
+        err_msg = stderr or stdout or f"exit code {result.returncode}"
+        return {"error": err_msg[:300]}
+
     if not stdout:
         return {}
+
+    # 尝试 JSON 解析
     try:
         return json.loads(stdout)
     except json.JSONDecodeError:
-        return {"text": stdout[:200]}
+        pass
+
+    # 纯文本响应 — 检测是否隐含错误
+    text = stdout[:300]
+    for pat in _CUA_ERROR_PATTERNS:
+        if pat.lower() in text.lower():
+            return {"error": text}
+    return {"text": text}
 
 
 # ══════════════════════════════════════════════════
@@ -254,8 +281,20 @@ def navigate_to_recommend(pid: int, window_id: int):
 # 核心: 逐个遍历 → 提取 → 筛选 → 打招呼
 # ══════════════════════════════════════════════════
 
+# ── 按钮匹配：支持多种 AX 元素类型 + 多种文案 ──
+_BUTTON_LABELS = ["打招呼", "立即沟通"]
+_BUTTON_AX_TYPES = ["AXButton", "AXLink", "AXCell", "AXGroup"]
+# 已沟通标记 — 识别后丢弃该候选人，绝不重复点击
+_SKIP_BUTTON_LABELS = ["继续沟通", "已沟通", "已打招呼"]
+
+
 def _parse_candidates_from_tree(tree: str) -> list[dict]:
-    """从 AX 树文本解析候选人卡片列表 (学校/学历/名字/打招呼按钮索引)"""
+    """从 AX 树文本解析候选人卡片列表 (学校/学历/名字/打招呼按钮索引)
+
+    逐行状态机：累积学校→学历→名字，遇到按钮行时提交一个候选人记录。
+    按钮匹配支持多种 AX 元素类型和文案（适配 BOSS 页面变化）。
+    遇到 "继续沟通/已沟通" 等已联系标记时丢弃当前候选人，避免重复打扰。
+    """
     candidates = []
     current = {}
     for line in tree.split("\n"):
@@ -276,13 +315,22 @@ def _parse_candidates_from_tree(tree: str) -> list[dict]:
             if not name.startswith("/") and "." not in name and len(name) < 20:
                 current["name"] = name
 
-        if "打招呼" in s and "AXButton" in s:
-            m = re.search(r'\[(\d+)\]', s)
-            if m:
-                current["greet_index"] = int(m.group(1))
-            if current.get("school"):
-                candidates.append(dict(current))
-            current = {}
+        # ── 多模式按钮匹配 ──
+        is_button_line = any(t in s for t in _BUTTON_AX_TYPES)
+        if is_button_line:
+            # 先检查是否为"已沟通"类 → 丢弃，不追加，但重置状态防止泄漏
+            if any(kw in s for kw in _SKIP_BUTTON_LABELS):
+                current = {}
+                continue
+
+            # 匹配打招呼/立即沟通
+            if any(kw in s for kw in _BUTTON_LABELS):
+                m = re.search(r'\[(\d+)\]', s)
+                if m:
+                    current["greet_index"] = int(m.group(1))
+                if current.get("school"):
+                    candidates.append(dict(current))
+                current = {}
 
     # 去重
     seen = set()
@@ -297,10 +345,81 @@ def _parse_candidates_from_tree(tree: str) -> list[dict]:
 
 
 def _refresh_page(pid: int, wid: int):
-    """刷新推荐页并等待加载"""
+    """刷新推荐页并等待加载（宽松模式）"""
     print("  🔄 刷新页面获取新候选人...", end=" ", flush=True)
     cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["cmd", "r"]}))
-    wait_for_page(pid, wid, label="刷新")
+    for _ in range(6):
+        time.sleep(2)
+        r = cua("page", json.dumps({
+            "pid": pid, "window_id": wid,
+            "action": "execute_javascript",
+            "javascript": "document.readyState",
+        }))
+        ready_val = " ".join(str(x) for x in r) if isinstance(r, list) else str(r.get("result", r.get("text", "")))
+        if ready_val.strip().strip('"') == "complete":
+            break
+    time.sleep(3)
+    snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": wid}))
+    elem_count = snap.get("element_count", 0)
+    greet_count = snap.get("tree_markdown", "").count("打招呼")
+    print(f"✓ ({greet_count}打招呼, {elem_count}元素)")
+
+
+def _scroll_down(pid: int, wid: int, times: int = 3):
+    """向下滚动页面加载更多候选人"""
+    for _ in range(times):
+        cua("page", json.dumps({
+            "pid": pid, "window_id": wid,
+            "action": "execute_javascript",
+            "javascript": "window.scrollBy(0, 800)",
+        }))
+        time.sleep(1.5)
+    time.sleep(2)  # 等 React 渲染新卡片
+
+
+def _click_greet_button(pid: int, wid: int, idx: int) -> bool:
+    """点击打招呼按钮。先校验 AX 树中该索引仍有效，再执行点击。
+
+    返回: True=点击成功, False=跳过或失败
+    """
+    # ── 点击前校验：重新获取 AX 树确保索引有效 ──
+    snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": wid}))
+    tree = snap.get("tree_markdown", "")
+    if not tree:
+        print(f"⚠️ AX树为空")
+        return False
+
+    # 找到该索引对应的行
+    target_line = ""
+    for line in tree.split("\n"):
+        if f"[{idx}]" in line:
+            target_line = line
+            break
+
+    if not target_line:
+        print(f"⚠️ 索引{idx}不在AX树中")
+        return False
+
+    # 已经联系过 → 绝不复点
+    if any(kw in target_line for kw in _SKIP_BUTTON_LABELS):
+        print(f"⏭ 已是'继续沟通', 跳过")
+        return False
+
+    # 不是打招呼按钮 → 跳过（索引过期）
+    if not (any(kw in target_line for kw in _BUTTON_LABELS) and
+            any(t in target_line for t in _BUTTON_AX_TYPES)):
+        print(f"⚠️ 索引已过期(非打招呼按钮), 跳过")
+        return False
+
+    # ── 执行点击 ──
+    result = cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": idx}))
+    err = result.get("error", "")
+    if err:
+        print(f"❌ {err}")
+        return False
+
+    print("✅")
+    return True
 
 
 def process_candidates(
@@ -313,15 +432,12 @@ def process_candidates(
 ) -> tuple[int, int, str]:
     """逐个遍历候选人卡片, 边筛边打, 卡片耗尽自动刷新
 
-    对每个卡片:
-      1. 提取学校名 / 学历 / 名字 / 打招呼按钮索引
-      2. 判断: 学历 == target_degree 且 学校 in whitelist → 通过
-      3. 通过 → 点击打招呼 (dry_run 跳过)
-      4. 检测上限弹窗
+    核心优化: 每次点击后重新 snapshot + 重新解析，确保每次点击使用的
+    都是最新鲜的 element_index，消除"索引过期"导致的跳过。
 
-    当前页卡片耗尽时自动刷新获取新卡片, 直到:
-      - 已判断卡片数 >= limit
-      - 沟通次数上限弹窗
+    流程:
+      每轮循环 → 获取 AX 树 → 解析候选人 → 找第一个通过筛选的 → 点击
+      → 重新获取 AX 树（索引已刷新）→ 继续下一个
 
     返回: (greeted, judged, stop_reason)
     """
@@ -332,9 +448,10 @@ def process_candidates(
     seen_candidates = set()  # 跨页去重: (name, school)
     stop_reason = "完成"
     page_round = 1
+    empty_rounds = 0  # 连续无新候选人计数，防无限刷新
 
     while judged < limit:
-        # ── 获取 AX 树 ──
+        # ── 每次循环都获取最新 AX 树 ──
         snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": wid}))
         tree = snap.get("tree_markdown", "")
         if not tree:
@@ -344,104 +461,97 @@ def process_candidates(
 
         candidates = _parse_candidates_from_tree(tree)
 
-        # 跨页去重
-        fresh = [c for c in candidates if (c.get("name"), c.get("school")) not in seen_candidates]
-        dupes = len(candidates) - len(fresh)
-
-        if page_round == 1:
+        # 首次显示扫描结果
+        if page_round == 1 and judged == 0:
             print(f"  [第{page_round}页] 扫描到 {len(candidates)} 人")
-        else:
-            print(f"\n  [第{page_round}页] 扫描到 {len(candidates)} 人 (去重 {dupes} | 累计判断 {judged}/{limit})")
 
-        # ── 逐个判断 + 打招呼 ──
-        page_judged = 0
-
-        for c in fresh:
-            if judged >= limit:
-                stop_reason = f"达到判断上限 ({limit})"
-                print(f"\n⏹ {stop_reason}")
-                break
-
-            name = c.get("name", "?")
-            school = c.get("school", "?")
-            degree = c.get("degree", "?")
-            idx = c.get("greet_index")
-
-            seen_candidates.add((name, school))
-            judged += 1
-            page_judged += 1
-
-            # 筛选判断
-            degree_pass = degree == target_degree
-            school_pass = match_school(school, school_whitelist)
-            passed = degree_pass and school_pass
-
-            # 状态标记
-            status = "✅" if passed else "  "
-            fail_reason = ""
-            if not passed:
-                parts = []
-                if not degree_pass:
-                    parts.append(f"学历不达标({degree}!={target_degree})")
-                if not school_pass:
-                    parts.append(f"学校不在白名单({school})")
-                fail_reason = " | ".join(parts)
-
-            print(f"  [{judged:>3}/{limit}] {status} {name:10s} | {school:16s} | {degree:4s}"
-                  + (f" | {fail_reason}" if fail_reason else ""))
-
-            if not passed:
+        # 找第一个：未处理 + 通过筛选 + 有按钮索引
+        best = None
+        for c in candidates:
+            key = (c.get("name"), c.get("school"))
+            if key in seen_candidates:
                 continue
+            # 找到第一个未处理的
+            seen_candidates.add(key)
+            best = c
+            break
 
-            # 通过 → 打招呼
-            if not idx:
-                print(f"         ⚠ 无按钮索引, 跳过")
+        if best is None:
+            # 当前页所有候选人都已处理 → 先尝试滚动加载更多
+            empty_rounds += 1
+            if empty_rounds == 1:
+                print(f"  📜 滚动加载更多候选人...", end=" ", flush=True)
+                _scroll_down(pid, wid)
                 continue
-
-            if dry_run:
+            elif empty_rounds == 2:
+                print(f"  🔄 刷新页面...", end=" ", flush=True)
+                _refresh_page(pid, wid)
+                page_round += 1
                 continue
-
-            # 页面间隔
-            if greeted > 0:
-                time.sleep(random.uniform(2, 4))
-
-            print(f"         打招呼 (idx={idx})...", end=" ", flush=True)
-            result = cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": idx}))
-            err = result.get("error", "")
-            if err:
-                print(f"❌ {err}")
             else:
-                print("✅")
-                greeted += 1
-
-            # 检测上限弹窗
-            limit_reason = check_limit_popup(pid, wid)
-            if limit_reason:
-                print(f"  🛑 {limit_reason}")
-                dismiss_limit_popup(pid, wid)
-                stop_reason = f"沟通次数上限 ({limit_reason})"
-                print(f"\n⏹ {stop_reason}")
+                print(f"  ⚠ 连续{empty_rounds}轮无新候选人, 停止")
+                stop_reason = "候选人耗尽"
                 break
 
-            time.sleep(random.uniform(1.5, 3))
+        empty_rounds = 0
 
-        # ── 本轮循环后的判断 ──
-        if stop_reason != "完成":
-            break  # 上限弹窗触发了
+        name = best.get("name", "?")
+        school = best.get("school", "?")
+        degree = best.get("degree", "?")
+        idx = best.get("greet_index")
 
-        if judged >= limit:
-            break  # 达到 limit
+        judged += 1
 
-        if page_judged == 0 and len(fresh) == 0:
-            # 空页 — 刷新试试
-            print(f"  ⚠ 当前页无候选人, 刷新...")
-            _refresh_page(pid, wid)
-            page_round += 1
+        # ── 筛选判断 ──
+        degree_pass = degree == target_degree
+        school_pass = match_school(school, school_whitelist)
+        passed = degree_pass and school_pass
+
+        # 状态标记
+        status = "✅" if passed else "  "
+        fail_reason = ""
+        if not passed:
+            parts = []
+            if not degree_pass:
+                parts.append(f"学历不达标({degree}!={target_degree})")
+            if not school_pass:
+                parts.append(f"学校不在白名单({school})")
+            fail_reason = " | ".join(parts)
+
+        print(f"  [{judged:>3}/{limit}] {status} {name:10s} | {school:16s} | {degree:4s}"
+              + (f" | {fail_reason}" if fail_reason else ""))
+
+        if not passed:
+            continue  # 不通过 → 直接下一轮（重新 snapshot）
+
+        # 通过筛选 → 打招呼
+        if not idx:
+            print(f"         ⚠ 无按钮索引, 跳过")
             continue
 
-        # 卡片耗尽但未达 limit → 刷新页面获取新卡片
-        _refresh_page(pid, wid)
-        page_round += 1
+        if dry_run:
+            continue
+
+        # ── 打招呼间隔 ──
+        if greeted > 0:
+            time.sleep(random.uniform(2, 4))
+
+        print(f"         打招呼 (idx={idx})...", end=" ", flush=True)
+
+        if _click_greet_button(pid, wid, idx):
+            greeted += 1
+
+        # 检测上限弹窗
+        limit_reason = check_limit_popup(pid, wid)
+        if limit_reason:
+            print(f"  🛑 {limit_reason}")
+            dismiss_limit_popup(pid, wid)
+            stop_reason = f"沟通次数上限 ({limit_reason})"
+            print(f"\n⏹ {stop_reason}")
+            break
+
+        # 点击后的间隔（防风控）
+        time.sleep(random.uniform(1.5, 3))
 
     else:
         stop_reason = f"达到判断上限 ({limit})"
