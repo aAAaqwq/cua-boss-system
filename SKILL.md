@@ -243,6 +243,7 @@ init_db()              # 重建/确认表结构
 | 白名单、学校筛选、学历筛选、筛选条件 | `app/filter_criteria.py` |
 | 话术、回复模板、聊天模板、自动回复内容 | `app/chat_reply.py` / `config/templates.json` |
 | 岗位配置、职位要求、job config | `config/jobs.json` |
+| 评分、打分、候选人评分、score、评估候选人 | `app/scoring.py`（见下方评分系统节） |
 | 干跑、预览、dry run、不实际操作 | 任意脚本加 `--dry-run` |
 | 部署到服务器、crontab、定时任务、自动化排期 | 参考下方定时任务节 |
 
@@ -439,6 +440,91 @@ python scripts/boss_click_buheshi.py
 
 ---
 
+## 评分系统 (`app/scoring.py` + `config/scoring.json`)
+
+多维度 AI 评分，满分 100。每个岗位可独立配置评分维度和权重，全部维度统一走 DeepSeek 一次 API 调用。
+
+### 快速使用
+
+```bash
+# 命令行交互评分（从 candidates.db 读取全部候选人）
+python3 app/scoring.py
+```
+
+```python
+# 代码调用
+from app.scoring import evaluate_candidate, format_score_report, load_scoring_config
+
+config = load_scoring_config()
+score = evaluate_candidate(
+    candidate_data={
+        "name": "张三", "school": "华中科技大学", "degree": "硕士",
+        "job_position": "高级Java工程师",
+        "chat_history": [...], "resume_content": "5年Java经验...",
+    },
+    job_id="dev", category="tech",
+    job_context="开发 — 需要5-10年Java经验",
+)
+print(format_score_report(score, verbose=True))
+```
+
+### 评分流程
+
+```
+resolve_dimensions(job_id, category)  → 获取维度（岗位覆盖 > 类别默认）
+    ↓
+_build_scoring_prompt()  → 拼接 prompt（候选人信息 + 聊天记录 + 维度清单 + 岗位要求）
+    ↓
+_call_deepseek_scoring()  → 一次 API 调用，返回全部分数+依据+总结
+    ↓
+加权汇总: raw_score / 10 × weight  → 总分（满分100）
+    ↓
+format_score_report()  → 评级 S/A/B/C/D + 每维度分条 + 进度条 + 依据
+```
+
+### 维度配置
+
+两层配置，岗位覆盖优先（`config/scoring.json`）：
+
+| 来源 | 适用 | 维度示例 |
+|---|---|---|
+| tech 默认 | `dev` | 技术深度(35) 项目质量(30) 工具链匹配(15) 教育背景(8) 工作经验(7) 沟通表达(5) |
+| nontech 默认 | `annotation` | 行业经验(25) 业绩成果(25) 资源网络(15) 管理能力(15) 教育背景(10) 沟通表达(10) |
+| 岗位覆盖 | `annotation-2` | 战略思维(25) 落地执行(25) 学习能力(15) 管理能力(15) 教育背景(10) 沟通表达(10) |
+
+新增岗位只需在 `scoring.json` 加维度配置（权重和=100），无需改代码。
+
+### 输入数据
+
+| 字段 | 来源 | 说明 |
+|---|---|---|
+| `name` | candidates.db | 候选人姓名 |
+| `school` / `degree` | candidates.db | 学校 / 学历 |
+| `job_position` | candidates.db | 当前职位 |
+| `chat_history` | candidates.db | 聊天记录 JSON（最近 10 条） |
+| `resume_content` | candidates.db | 简历全文 |
+| `notes` | candidates.db | 备注 |
+| `job_context` | jobs.json | 岗位 title + requirements |
+
+### AI 评分细节
+
+- **模型**：DeepSeek（`deepseek-chat`）
+- **Temperature**：0.3（保持一致性）
+- **信息不足**：保守偏低，不凭空猜测
+- **API Key 未配**：全部维度 0 分，errors 提示
+
+### 评级标准
+
+| 总分 | 评级 |
+|---|---|
+| ≥85 | S — 强烈推荐 |
+| ≥70 | A — 推荐 |
+| ≥55 | B — 可考虑 |
+| ≥40 | C — 待定 |
+| <40 | D — 不推荐 |
+
+---
+
 ## cua-driver 集成要点（Agent 须知）
 
 | 要点 | 说明 |
@@ -491,10 +577,12 @@ cua-boss-system/
 ├── app/
 │   ├── db.py                 # 共享数据库模块(init_db / backup_db / clear_db)
 │   ├── filter_criteria.py    # 名校白名单 + 学校匹配 + 学历判断
-│   └── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知) + 岗位检测
+│   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知) + 岗位检测
+│   └── scoring.py            # 候选人评分系统(AI多维度/按岗位自定义权重)
 ├── config/
 │   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 同步）
 │   ├── templates.json        # 话术模板（专属→类别→兜底 三层）
+│   ├── scoring.json          # 评分维度配置（按类别默认/岗位覆盖/权重100）
 │   └── system_prompt.md      # DeepSeek 系统提示词（HR招聘专家人设）
 ├── scripts/
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）

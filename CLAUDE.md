@@ -9,10 +9,12 @@ cua-boss-system/
 ├── app/
 │   ├── db.py                 # 共享数据库模块(init_db / DB_PATH / schema迁移)
 │   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
-│   └── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测
+│   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测
+│   └── scoring.py            # 候选人评分系统(rule+AI/可配置维度/按岗位自定义权重)
 ├── config/
 │   ├── jobs.json             # 岗位配置(cua_sync_jobs.py 自动同步)
 │   ├── templates.json        # 话术模板(专属→类别→兜底 三层)
+│   ├── scoring.json          # 评分维度配置(按类别默认/岗位覆盖/权重100)
 │   └── system_prompt.md      # DeepSeek 系统提示词(HR招聘专家人设，.md维护)
 ├── scripts/
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent原生鼠标)
@@ -193,6 +195,57 @@ candidates 表核心字段:
 - 学校: 985/211/海外名校白名单
 - 学历: 博士(4) > 硕士(3) > 本科(2) > 大专(1)
 - 打招呼取卡片教育经历**最后一行**(时间最早=本科)，非最高学历
+
+## 评分系统 (scoring.py + scoring.json)
+
+多维度 AI 评分，满分 100。每个岗位可独立配置评分维度和权重。全部维度统一走 DeepSeek 一次 API 调用完成。
+
+### 配置 (config/scoring.json)
+
+两层配置，岗位覆盖优先：
+```
+category_defaults  →  按类别设默认维度+权重（tech / nontech）
+job_overrides      →  具体岗位覆盖默认值（如 annotation-2）
+```
+
+每个维度定义: `{key, name, weight, description}` — 纯描述，无需 `eval_type`。
+
+### 使用
+
+```python
+from app.scoring import evaluate_candidate, format_score_report, load_scoring_config
+
+config = load_scoring_config()
+score = evaluate_candidate(
+    candidate_data={"name": "张三", "school": "清华", "degree": "硕士", ...},
+    job_id="dev", category="tech",
+    job_context="开发 — 需要5-10年Java经验",
+    config=config,
+)
+print(format_score_report(score, verbose=True))
+# 输出: 总分/100 + 每维度分数 + 打分依据 + 综合评价
+```
+
+### 打分流程
+
+```
+1. resolve_dimensions(job_id, category)  → 获取维度列表（覆盖 > 默认）
+2. _build_scoring_prompt()               → 将全部维度 + 候选人信息 + 聊天记录
+                                             拼接为评分 prompt
+3. _call_deepseek_scoring()              → 一次 API 调用，返回所有维度分数+依据+总结
+4. 加权汇总: raw_score / 10 × weight     → 总分
+```
+
+### AI prompt 内容
+
+- 岗位要求（job_context）
+- 候选人信息（姓名/职位/学校/学历/简历/备注）
+- 聊天记录（最近 10 条对话）
+- 评分维度清单（名称/权重/说明）
+
+返回 JSON: `{"dimensions": {"key": {"score": 0-10, "evidence": "..."}}, "summary": "综合评价"}`
+
+DeepSeek 未配置时所有维度标记为 0 分并在 errors 中提示。
 
 ## cua-driver 集成要点
 

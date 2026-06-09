@@ -199,6 +199,53 @@ DEEPSEEK_API_KEY=sk-your-api-key-here
 
 未配置时不会报错，但所有智能回复降级为模板原文，回复质量显著下降。
 
+## 评分系统 (`app/scoring.py` + `config/scoring.json`)
+
+多维度 AI 评分，满分 100。按岗位可自定义维度和权重，全部维度统一走 DeepSeek 一次 API 调用。
+
+### 快速使用
+
+```bash
+# 命令行交互评分（从 candidates.db 读取）
+python3 app/scoring.py
+```
+
+```python
+from app.scoring import evaluate_candidate, format_score_report
+
+score = evaluate_candidate(
+    candidate_data={"name": "张三", "school": "华中科技大学", "degree": "硕士", ...},
+    job_id="dev", category="tech",
+    job_context="开发 — 需要5-10年Java经验",
+)
+print(format_score_report(score, verbose=True))
+# 输出: 总分/100 + 评级 + 每维度分条 + 打分依据
+```
+
+### 维度配置（`config/scoring.json`）
+
+两层配置，岗位覆盖优先：
+
+| 来源 | 岗位 | 维度（权重降序） |
+|---|---|---|
+| tech 默认 | `dev` | 技术深度(35) 项目质量(30) 工具链匹配(15) 教育背景(8) 工作经验(7) 沟通表达(5) |
+| nontech 默认 | `annotation` | 行业经验(25) 业绩成果(25) 资源网络(15) 管理能力(15) 教育背景(10) 沟通表达(10) |
+| 岗位覆盖 | `annotation-2` | 战略思维(25) 落地执行(25) 学习能力(15) 管理能力(15) 教育背景(10) 沟通表达(10) |
+
+新增岗位只需在 `scoring.json` 加维度配置（权重和=100），无需改代码。
+
+### 评分流程
+
+```
+维度解析 → prompt 拼接（候选人信息 + 聊天记录 + 维度清单）→ DeepSeek 评估 → 加权汇总 → 报告
+```
+
+### 评级
+
+| 总分 | ≥85 | ≥70 | ≥55 | ≥40 | <40 |
+|---|---|---|---|---|---|
+| 评级 | S 强烈推荐 | A 推荐 | B 可考虑 | C 待定 | D 不推荐 |
+
 ## 数据库 (candidates.db)
 
 `app/db.py` 统一管理表结构和迁移，所有脚本共用。
@@ -223,10 +270,12 @@ cua-boss-system/
 ├── app/
 │   ├── db.py                 # 共享数据库模块(init_db / DB_PATH)
 │   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
-│   └── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 阶段感知 + 变量替换
+│   ├── chat_reply.py         # 模板匹配 + DeepSeek + 岗位检测 + 阶段感知 + 变量替换
+│   └── scoring.py            # 候选人评分系统(AI多维度/按岗位自定义权重)
 ├── config/
 │   ├── jobs.json             # 岗位配置（cua_sync_jobs.py --write 同步）
 │   ├── templates.json        # 话术模板（专属→类别→兜底 三层）
+│   ├── scoring.json          # 评分维度配置（按类别默认/岗位覆盖/权重100）
 │   └── system_prompt.md      # DeepSeek 系统提示词（HR 招聘专家人设）
 ├── scripts/
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）

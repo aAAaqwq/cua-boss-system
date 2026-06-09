@@ -1,0 +1,49 @@
+{
+  "version": 2,
+  "description": "候选人评分维度配置 — 按岗位类别设默认维度+权重，具体岗位可覆盖。所有维度统一走 AI 评分，总分 100。",
+
+  "scoring_scale": {
+    "min": 0,
+    "max": 10,
+    "description": "每个维度打 0-10 分，加权后汇总为百分制"
+  },
+
+  "category_defaults": {
+    "tech": {
+      "description": "技术岗 — 开发/算法/数据/AI 等",
+      "dimensions": [
+        {"key": "tech_depth",      "name": "技术深度",   "weight": 35, "description": "算法理解、系统设计、架构能力、技术选型判断力"},
+        {"key": "project_quality", "name": "项目质量",   "weight": 30, "description": "项目复杂度、线上规模、技术难点、开源贡献"},
+        {"key": "toolchain_match", "name": "工具链匹配", "weight": 15, "description": "技术栈与岗位要求吻合度、学习新工具的速度"},
+        {"key": "education",       "name": "教育背景",   "weight": 8,  "description": "学校层次（985/211/海外名校）、学历等级、专业相关性"},
+        {"key": "experience",      "name": "工作经验",   "weight": 7,  "description": "工作年限、公司背景（大厂/创业/外企）、项目周期"},
+        {"key": "communication",   "name": "沟通表达",   "weight": 5,  "description": "逻辑清晰度、技术表达力、主动性、协作意识"}
+      ]
+    },
+    "nontech": {
+      "description": "非技术岗 — 运营/市场/销售/职能/管理 等",
+      "dimensions": [
+        {"key": "industry_exp",    "name": "行业经验",   "weight": 25, "description": "相关行业深度、市场理解、竞品认知"},
+        {"key": "performance",     "name": "业绩成果",   "weight": 25, "description": "可量化的业务成果、KPI 达成记录、增长数据"},
+        {"key": "network",         "name": "资源网络",   "weight": 15, "description": "行业人脉、KOL 关系、渠道资源、合作伙伴"},
+        {"key": "management",      "name": "管理能力",   "weight": 15, "description": "团队管理经验、跨部门协调、项目推进能力"},
+        {"key": "education",       "name": "教育背景",   "weight": 10, "description": "学校层次（985/211/海外名校）、学历等级、专业相关性"},
+        {"key": "communication",   "name": "沟通表达",   "weight": 10, "description": "逻辑清晰度、说服力、谈判能力、主动性"}
+      ]
+    }
+  },
+
+  "job_overrides": {
+    "annotation-2": {
+      "description": "CEO 标注助理 — 侧重战略思维与落地执行",
+      "dimensions": [
+        {"key": "strategic_thinking", "name": "战略思维", "weight": 25, "description": "商业洞察力、战略解码能力、从 1 到 N 的思考框架"},
+        {"key": "execution",          "name": "落地执行", "weight": 25, "description": "多线程推进能力、结果导向、闭环意识"},
+        {"key": "learning_ability",   "name": "学习能力", "weight": 15, "description": "快速学习新领域、AI 工具使用、成长潜力"},
+        {"key": "management",         "name": "管理能力", "weight": 15, "description": "向上管理、跨部门协调、优先级判断"},
+        {"key": "education",          "name": "教育背景", "weight": 10, "description": "学校层次（985/211/海外名校）、学历等级"},
+        {"key": "communication",      "name": "沟通表达", "weight": 10, "description": "书面表达质量、汇报能力、中英文水平"}
+      ]
+    }
+  }
+}
