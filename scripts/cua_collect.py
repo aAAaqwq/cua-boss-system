@@ -739,12 +739,23 @@ def main():
     tree = ax_tree(pid, wid)
     times = re.findall(r'AXStaticText\s*=\s*"(\d{1,2}:\d{2})"', tree)
     if len(times) < 5:
-        # 导航+等渲染
         print("  导航到聊天页...")
-        cua("page", json.dumps({
+        # 优先 JS 导航
+        r = cua("page", json.dumps({
             "pid": pid, "window_id": wid, "action": "execute_javascript",
             "javascript": f'window.location.href = "{CHAT}"',
         }))
+        # JS 失败 → AX 点击"沟通"链接兜底
+        if r.get("error"):
+            print("  JS 导航失败, 改用 AX 点击...")
+            comm_tree = ax_tree(pid, wid)
+            for line in comm_tree.split("\n"):
+                if "沟通" in line and "AXLink" in line and "意向" not in line:
+                    m = re.search(r'\[(\d+)\]', line)
+                    if m:
+                        cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": int(m.group(1))}))
+                        time.sleep(3)
+                        break
         for i in range(30):
             time.sleep(1)
             times = re.findall(r'AXStaticText\s*=\s*"(\d{1,2}:\d{2})"', ax_tree(pid, wid))

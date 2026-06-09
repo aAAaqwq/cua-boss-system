@@ -4,11 +4,12 @@ BOSS直聘 — 点击"不合适"按钮（共享模块）
 
 cua_collect.py 和 cua_chat_loop.py 通过此模块统一触发"不合适"操作。
 
-流程（与 boss_click_buheshi.sh 一致）:
-  1. AX 检测 "不合适" → JS 获取 DOM 元素屏幕坐标
-  2. macOS 原生移动鼠标到按钮上（hover），触发下拉面板
-  3. AX 轮询等待面板展开（检测 "标为不合适" 出现）
-  4. macOS 原生点击
+流程:
+  1. AX 检测 "不合适" → 提取 element_index
+  2. JS dispatchEvent 触发 hover（mouseenter/mouseover），展开下拉面板
+  3. AX 轮询等待面板展开（检测 "标为不合适" 出现），最多等 15s
+  4. cua-driver click（element_index，AX 路径，无坐标依赖）
+     → 兜底: JS el.click()
   5. 最终 AX 验证（薪资不符/学历不符/确认）
 
 用法:
@@ -18,18 +19,15 @@ cua_collect.py 和 cua_chat_loop.py 通过此模块统一触发"不合适"操作
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 # ══════════════════════════════════════════════════
 # 常量
 # ══════════════════════════════════════════════════
 
-HID_BIN = "/tmp/cua_hid"
 BROWSER = "com.google.Chrome"
 
 # ── 颜色输出 ──
@@ -116,85 +114,80 @@ def _ax_has_text(text: str, pid: int, wid: int) -> bool:
 
 
 # ══════════════════════════════════════════════════
-# macOS CGEvent 原生鼠标操作
+# AX element_index 提取（替代 CGEvent 坐标定位）
 # ══════════════════════════════════════════════════
 
-def _ensure_hid() -> None:
-    """编译 CGEvent Swift 鼠标工具（如不存在）"""
-    if os.path.isfile(HID_BIN) and os.access(HID_BIN, os.X_OK):
-        return
+def _find_element_index(text: str, pid: int, wid: int) -> int | None:
+    """在 AX 树中查找包含指定文本的可交互元素，返回 element_index
 
-    _log("INFO", "编译 CGEvent 鼠标工具...")
-    swift_src = r'''
-import CoreGraphics; import Foundation
-let a=CommandLine.arguments
-guard a.count>=4,let x=Double(a[2]),let y=Double(a[3]) else {exit(1)}
-let p=CGPoint(x:x,y:y);let s=CGEventSource(stateID:.hidSystemState)
-switch a[1] {
-case "move":
-    if let m=CGEvent(mouseEventSource:s,mouseType:.mouseMoved,mouseCursorPosition:p,mouseButton:.left){m.post(tap:.cghidEventTap)}
-    print("moved to (\(x),\(y))")
-case "click":
-    if let m=CGEvent(mouseEventSource:s,mouseType:.mouseMoved,mouseCursorPosition:p,mouseButton:.left){m.post(tap:.cghidEventTap);usleep(30000)}
-    if let d=CGEvent(mouseEventSource:s,mouseType:.leftMouseDown,mouseCursorPosition:p,mouseButton:.left){d.post(tap:.cghidEventTap);usleep(10000)}
-    if let u=CGEvent(mouseEventSource:s,mouseType:.leftMouseUp,mouseCursorPosition:p,mouseButton:.left){u.post(tap:.cghidEventTap)}
-    print("clicked (\(x),\(y))")
-default: exit(1)
-}
-'''
-    swift_path = "/tmp/cua_hid.swift"
-    Path(swift_path).write_text(swift_src)
-    r = subprocess.run(
-        ["swiftc", "-o", HID_BIN, swift_path],
-        capture_output=True, text=True, timeout=30,
-    )
-    if r.returncode != 0:
-        _log("ERROR", f"swiftc 编译失败: {r.stderr}")
-        sys.exit(1)
-    _log("OK", "CGEvent 鼠标工具就绪")
-
-
-def _hid_move(x: int, y: int) -> str:
-    """原生移动鼠标到屏幕坐标 (x, y)"""
-    r = subprocess.run([HID_BIN, "move", str(x), str(y)],
-                       capture_output=True, text=True, timeout=5)
-    return r.stdout.strip()
-
-
-def _hid_click(x: int, y: int) -> str:
-    """原生点击屏幕坐标 (x, y)"""
-    r = subprocess.run([HID_BIN, "click", str(x), str(y)],
-                       capture_output=True, text=True, timeout=5)
-    return r.stdout.strip()
+    遍历 get_window_state 返回的 tree_markdown，匹配首个包含 text 且
+    带有 [N] 标记的行，提取并返回 N。
+    """
+    r = _cua("get_window_state", json.dumps({
+        "pid": pid, "window_id": wid, "capture_mode": "ax", "query": text,
+    }))
+    tree = r.get("tree_markdown", "")
+    if not tree:
+        return None
+    for line in tree.split("\n"):
+        if text in line:
+            m = re.search(r'\[(\d+)\]', line)
+            if m:
+                return int(m.group(1))
+    return None
 
 
 # ══════════════════════════════════════════════════
-# 核心: 获取"不合适"按钮屏幕坐标
+# JS hover 触发（替代 CGEvent 鼠标移动）
 # ══════════════════════════════════════════════════
 
-def _get_pos_buheshi(pid: int, wid: int) -> tuple[int, int] | None:
-    """JS 获取 .operate-icon-item[8] 的屏幕坐标（第9个操作图标="不合适"）
+def _trigger_hover_js(pid: int, wid: int) -> bool:
+    """通过 JS dispatchEvent 在"不合适"按钮上触发 hover
+
+    BOSS 直聘使用 React，事件委托在 document root。
+    dispatchEvent({bubbles: true}) 可以穿透 React 的合成事件系统。
+    同时派发 mouseenter / mouseover / pointerenter 覆盖多种事件绑定。
 
     Returns:
-        (screen_x, screen_y) 或 None
+        True 如果 JS 执行成功（找到了元素并派发了事件）
     """
     js = """
 (function(){
     var el = document.querySelectorAll(".operate-icon-item")[8];
-    if (!el) return "null";
-    var r = el.getBoundingClientRect();
-    var sx = Math.round(window.screenX + r.x + r.width / 2);
-    var sy = Math.round(window.screenY + (window.outerHeight - window.innerHeight) + r.y + r.height / 2);
-    return sx + " " + sy;
+    if (!el) return "no_element";
+
+    // mouseenter + mouseover（兼容传统 onmouseenter/onmouseover）
+    el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true, cancelable: true}));
+    el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true, cancelable: true}));
+
+    // pointerenter（React 17+ 使用 pointer events）
+    try {
+        el.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true, cancelable: true}));
+    } catch(e) {
+        // PointerEvent 构造在某些环境不可用 → 忽略
+    }
+
+    return "hovered";
 })()
 """
     result = _cua_js(js, pid, wid).strip().strip('"')
-    if result == "null" or not result:
-        return None
-    parts = result.split()
-    if len(parts) >= 2:
-        return int(parts[0]), int(parts[1])
-    return None
+    return result == "hovered"
+
+
+def _click_via_js(pid: int, wid: int) -> bool:
+    """JS click 兜底 — 在"不合适"按钮上触发 click 事件"""
+    js = """
+(function(){
+    var el = document.querySelectorAll(".operate-icon-item")[8];
+    if (!el) return "no_element";
+    el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+    // el.click() 作为兜底（触发元素默认行为 + 事件）
+    try { el.click(); } catch(e) {}
+    return "clicked";
+})()
+"""
+    result = _cua_js(js, pid, wid).strip().strip('"')
+    return result == "clicked"
 
 
 # ══════════════════════════════════════════════════
@@ -205,10 +198,10 @@ def click_buheshi(pid: int, wid: int, verbose: bool = True) -> bool:
     """点击 BOSS 直聘聊天页右侧面板的"不合适"按钮
 
     流程:
-      Step 1: AX 检测 "不合适" → JS 获取屏幕坐标
-      Step 2: 原生移动鼠标到按钮上（hover），触发下拉面板
+      Step 1: AX 检测 "不合适" + 提取 element_index
+      Step 2: JS dispatchEvent 触发 hover，展开下拉面板
       Step 3: AX 轮询等待面板展开（检测 "标为不合适"），最多等 15s
-      Step 4: 原生点击
+      Step 4: cua-driver click（element_index AX 路径）→ 兜底 JS click
       Step 5: 最终 AX 验证
 
     Args:
@@ -219,33 +212,27 @@ def click_buheshi(pid: int, wid: int, verbose: bool = True) -> bool:
     Returns:
         True 成功 / False 失败
     """
-    # 确保 CGEvent 工具就绪
-    _ensure_hid()
-
-    # ── Step 1: AX 检测 + 获取坐标 ──
+    # ── Step 1: AX 检测 + 提取 element_index ──
     if verbose:
-        _log("INFO", "Step 1/3: AX 检测 '不合适' + 获取坐标...")
+        _log("INFO", "Step 1/3: AX 检测 '不合适' + 提取 element_index...")
 
     if not _ax_has_text("不合适", pid, wid):
         if verbose:
             _log("WARN", "未检测到 '不合适' — 无需操作")
         return False
 
-    pos = _get_pos_buheshi(pid, wid)
-    if pos is None:
-        if verbose:
-            _log("ERROR", "无法定位 '不合适' 按钮")
-        return False
-
-    sx, sy = pos
+    element_idx = _find_element_index("不合适", pid, wid)
     if verbose:
-        _log("OK", f"坐标: ({sx}, {sy})")
+        if element_idx is not None:
+            _log("OK", f"element_index={element_idx}")
+        else:
+            _log("WARN", "未找到 element_index，将使用 JS click 兜底")
 
-    # ── Step 2: 移动鼠标到按钮上 → 触发 hover ──
+    # ── Step 2: JS 触发 hover → 展开下拉面板 ──
     if verbose:
-        _log("INFO", "Step 2/3: 移动鼠标到按钮 → 等待面板展开...")
+        _log("INFO", "Step 2/3: JS 触发 hover → 等待面板展开...")
 
-    _hid_move(sx, sy)
+    _trigger_hover_js(pid, wid)
 
     # ── Step 3: AX 轮询等待 "标为不合适" 出现 ──
     waited = 0
@@ -266,9 +253,30 @@ def click_buheshi(pid: int, wid: int, verbose: bool = True) -> bool:
     if verbose:
         _log("INFO", "Step 3/3: 点击 '不合适'...")
 
-    _hid_click(sx, sy)
-    if verbose:
-        _log("OK", "点击完成")
+    clicked = False
+    if element_idx is not None:
+        r = _cua("click", json.dumps({
+            "pid": pid, "window_id": wid, "element_index": element_idx,
+        }))
+        if not r or r.get("error"):
+            if verbose:
+                _log("WARN", f"AX click 失败: {r.get('error', 'unknown')} → 尝试 JS click")
+        else:
+            clicked = True
+            if verbose:
+                _log("OK", "AX click 完成")
+
+    if not clicked:
+        if _click_via_js(pid, wid):
+            clicked = True
+            if verbose:
+                _log("OK", "JS click 完成")
+        else:
+            if verbose:
+                _log("ERROR", "JS click 也失败 — 无法定位按钮")
+
+    if not clicked:
+        return False
 
     # ── Step 5: 最终验证 ──
     time.sleep(0.5)
@@ -289,17 +297,16 @@ def click_buheshi(pid: int, wid: int, verbose: bool = True) -> bool:
 
 
 # ══════════════════════════════════════════════════
-# CLI（独立调试用 — 与 boss_click_buheshi.sh 行为一致）
+# CLI（独立调试用）
 # ══════════════════════════════════════════════════
 
 if __name__ == "__main__":
     print()
     print("╔══════════════════════════════════════════════╗")
-    print("║   BOSS '不合适' (hover等待面板 → 点击)      ║")
+    print("║   BOSS '不合适' (hover → 面板 → 点击)       ║")
     print("╚══════════════════════════════════════════════╝")
     print()
 
-    _ensure_hid()
     pid, wid = _find_window()
 
     ok = click_buheshi(pid, wid)
