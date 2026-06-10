@@ -49,7 +49,7 @@ def cua(*args: str) -> dict:
 
     注意：cua-driver 多数命令返回纯文本（非 JSON），不能仅靠 returncode 判断成败。
     """
-    cmd = ["cua-driver"] + list(args)
+    cmd = ["cua-driver", "call"] + list(args)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     stdout = result.stdout.strip()
     stderr = result.stderr.strip()

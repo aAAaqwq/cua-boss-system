@@ -50,7 +50,7 @@ LIMIT_KEYWORDS = [
 
 
 def cua(*args: str) -> dict:
-    cmd = ["cua-driver"] + list(args)
+    cmd = ["cua-driver", "call"] + list(args)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         return {}

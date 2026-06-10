@@ -41,7 +41,7 @@ _CUA_ERROR_PATTERNS = [
 
 def cua(*args):
     """调用 cua-driver CLI。返回 dict，失败时带 "error" 键。"""
-    cmd = ["cua-driver"] + list(args)
+    cmd = ["cua-driver", "call"] + list(args)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     stdout = r.stdout.strip()
     stderr = r.stderr.strip()

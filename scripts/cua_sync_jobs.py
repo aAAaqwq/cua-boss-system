@@ -47,7 +47,7 @@ ID_MAP = [
 
 
 def cua(*args):
-    cmd = ["cua-driver"] + list(args)
+    cmd = ["cua-driver", "call"] + list(args)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0: return {}
     try: return json.loads(r.stdout.strip() or "{}")

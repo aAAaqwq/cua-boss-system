@@ -50,7 +50,7 @@ def _log(level: str, msg: str) -> None:
 
 def _cua(*args: str) -> dict:
     """cua-driver 命令封装"""
-    cmd = ["cua-driver"] + list(args)
+    cmd = ["cua-driver", "call"] + list(args)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
         return {}
