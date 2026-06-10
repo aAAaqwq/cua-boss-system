@@ -9,8 +9,8 @@
   4. 覆盖写入 jobs.json（替换旧数据，保留话术模板）
 
 用法:
-  python scripts/cua_sync_jobs.py              # 预览
-  python scripts/cua_sync_jobs.py --write      # 提取 + 写入
+  python scripts/cua_sync_jobs.py              # 提取 + 自动写入 config/jobs.json
+  python scripts/cua_sync_jobs.py --dry-run    # 仅预览不写入
   python scripts/cua_sync_jobs.py --limit 3    # 只处理前N个
 """
 import json
@@ -78,10 +78,21 @@ def find_window():
 
 
 def nav_to(url, pid, wid, check_fn, timeout=25):
+    # 先检查是否已在目标页（避免不必要的导航）
+    if check_fn(pid, wid):
+        return True
+    # 策略: 硬刷新优先（BOSS SPA 对 JS navigation 渲染不稳定）
     cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": f'window.location.href = "{url}"',
     }))
+    time.sleep(2)
+    cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["cmd", "r"]}))
+    for _ in range(timeout):
+        time.sleep(1)
+        if check_fn(pid, wid): return True
+    # 兜底: 再试一次硬刷新
+    cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["cmd", "r"]}))
     for _ in range(timeout):
         time.sleep(1)
         if check_fn(pid, wid): return True
@@ -275,7 +286,7 @@ def load_existing_templates():
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--write", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="仅预览不写入")
     p.add_argument("--limit", type=int, default=0)
     args = p.parse_args()
 
@@ -389,7 +400,9 @@ def main():
             delay = 3 + random.random() * 4
             print(f"    ← 休息 {delay:.0f}s")
             time.sleep(delay)
-            nav_to(JOB_LIST, pid, wid, has_edit_links, timeout=20)
+            if not nav_to(JOB_LIST, pid, wid, has_edit_links, timeout=25):
+                print("    ⚠ 返回列表失败，跳过剩余岗位")
+                break
 
     if not extracted:
         print("\n❌ 未提取到任何岗位"); sys.exit(1)
@@ -416,11 +429,11 @@ def main():
         reqs = (j.get("requirements", "") or "")[:80]
         print(f"  ✅ {j['title']:35s} | {reqs}")
 
-    if args.write:
+    if args.dry_run:
+        print(f"\n⚠ 预览 — 未写入")
+    else:
         CONFIG.write_text(json.dumps(jobs_config, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n✓ 已覆盖写入 {CONFIG}")
-    else:
-        print(f"\n⚠ 预览 — 加 --write 写入")
 
 
 if __name__ == "__main__":
