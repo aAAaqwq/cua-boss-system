@@ -668,6 +668,12 @@ def read_conversation(pid: int, window_id: int) -> dict:
                 result["latest_candidate_msg"] = msg["content"]
                 break
 
+        if not result["last_sender"]:
+            print("    ⚠ 聊天历史提取成功，但无法判断最后发送者")
+    elif tree:
+        # AX 树存在但未提取到聊天历史 → BOSS 面板结构可能变化
+        print("    ⚠ AX 聊天历史提取失败（右侧面板可能结构变化），将无上下文生成回复")
+
     return result
 
 
@@ -901,6 +907,9 @@ def review_one_candidate(
                 seen_keys.add(key)
                 deduped.append(msg)
         chat_history = deduped[-20:]  # 保留最近 20 条
+
+    if not chat_history:
+        print("    ⚠ 无聊天历史（AX+DB均为空），DeepSeek 将仅凭最新消息生成回复")
 
     reply = generate_reply(
         latest_msg,
