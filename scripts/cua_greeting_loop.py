@@ -17,6 +17,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
+from app.chat_reply import check_degree
 
 SESSION_ID = "boss-greeting"
 CHROME_BUNDLE_ID = "com.google.Chrome"
@@ -503,7 +504,7 @@ def process_candidates(
         judged += 1
 
         # ── 筛选判断 ──
-        degree_pass = degree == target_degree
+        degree_pass = degree and check_degree(degree, target_degree)
         school_pass = match_school(school, school_whitelist)
         passed = degree_pass and school_pass
 
@@ -513,7 +514,7 @@ def process_candidates(
         if not passed:
             parts = []
             if not degree_pass:
-                parts.append(f"学历不达标({degree}!={target_degree})")
+                parts.append(f"学历不达标({degree}<{target_degree})")
             if not school_pass:
                 parts.append(f"学校不在白名单({school})")
             fail_reason = " | ".join(parts)
@@ -568,7 +569,7 @@ def main():
     parser.add_argument("--limit", type=int, default=20, help="最多判断候选人卡片数 (默认20)")
     parser.add_argument("--dry-run", action="store_true", help="仅预览, 不实际打招呼")
     parser.add_argument("--schools", type=str, help="自定义学校白名单, 逗号分隔")
-    parser.add_argument("--min-degree", type=str, default=DEFAULT_MIN_DEGREE, help=f"学历精确匹配 (默认{DEFAULT_MIN_DEGREE})")
+    parser.add_argument("--min-degree", type=str, default=DEFAULT_MIN_DEGREE, help=f"最低学历 (默认{DEFAULT_MIN_DEGREE})")
     args = parser.parse_args()
 
     school_whitelist = (
