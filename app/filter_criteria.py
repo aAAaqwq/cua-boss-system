@@ -1,13 +1,35 @@
 """
-筛选条件模块 — 轻量级，无重量依赖
+筛选条件模块 — 从 config/filter.json 加载配置，不存在则用 filter-template.json 兜底
 
 包含:
     - 名校白名单 (国内 + 海外)
     - 可扩展的 FilterCriteria 数据类
+    - 学校匹配 + 学历判断
 """
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Tuple
+
+FILTER_CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+# ── 加载筛选配置：filter.json 优先 → filter-template.json 兜底 ──
+_filter_path = FILTER_CONFIG_DIR / "filter.json"
+if not _filter_path.exists():
+    _filter_path = FILTER_CONFIG_DIR / "filter-template.json"
+
+_filter_data = {}
+if _filter_path.exists():
+    try:
+        _filter_data = json.loads(_filter_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, KeyError):
+        pass
+
+# 学历等级
+DEGREE_RANK = _filter_data.get("degree_rank", {"博士": 4, "硕士": 3, "本科": 2, "大专": 1})
+# 默认最低学历
+DEFAULT_MIN_DEGREE = _filter_data.get("min_degree", "本科")
 
 
 # ========== 名校白名单 ==========
@@ -133,7 +155,9 @@ OTHER_ELITE_SCHOOLS = [
 ]
 
 # 合并全部名校
-ALL_ELITE_SCHOOLS = DOMESTIC_ELITE_SCHOOLS + US_ELITE_SCHOOLS + UK_ELITE_SCHOOLS + OTHER_ELITE_SCHOOLS
+_HARDCODED_SCHOOLS = DOMESTIC_ELITE_SCHOOLS + US_ELITE_SCHOOLS + UK_ELITE_SCHOOLS + OTHER_ELITE_SCHOOLS
+# 从 JSON 配置加载，文件不存在或无字段时回退到硬编码
+ALL_ELITE_SCHOOLS = _filter_data.get("school_whitelist", _HARDCODED_SCHOOLS)
 
 
 # ========== 可扩展筛选条件 ==========

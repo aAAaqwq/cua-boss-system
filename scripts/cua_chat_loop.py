@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
 from app.chat_reply import load_jobs_config, generate_reply, check_degree, detect_job, check_deepseek_configured
 from app.db import DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
@@ -1172,7 +1172,7 @@ def main():
     parser.add_argument("--limit", type=int, default=20, help="最多处理N个未读 (默认20)")
     parser.add_argument("--dry-run", action="store_true", help="仅预览: 输入回复但不发送，不点不合适")
     parser.add_argument("--schools", type=str, default=None, help="学校白名单，逗号分隔 (默认ALL_ELITE_SCHOOLS)")
-    parser.add_argument("--min-degree", type=str, default="本科", help="最低学历要求 (默认本科)")
+    parser.add_argument("--min-degree", type=str, default=DEFAULT_MIN_DEGREE, help=f"最低学历要求 (默认{DEFAULT_MIN_DEGREE})")
     parser.add_argument("--config", type=str, default=None, help="话术模板文件路径")
     args = parser.parse_args()
 

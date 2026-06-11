@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
 from app.chat_reply import check_degree
 from app.db import init_db, DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
@@ -713,7 +713,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--min-degree", default="本科")
+    p.add_argument("--min-degree", default=DEFAULT_MIN_DEGREE, help=f"最低学历 (默认{DEFAULT_MIN_DEGREE})")
     p.add_argument("--schools", type=str)
     args = p.parse_args()
 

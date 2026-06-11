@@ -5,3 +5,5 @@ __pycache__/
 .env
 # 本地话术配置（从 reply-templates.json 复制后自定义，gitignore）
 reply.json
+# 本地筛选配置（从 filter-template.json 复制后自定义）
+filter.json
