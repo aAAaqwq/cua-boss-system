@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
-from app.chat_reply import load_jobs_config, generate_reply, check_degree, detect_job, check_deepseek_configured
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, check_candidate
+from app.chat_reply import load_jobs_config, generate_reply, detect_job, check_deepseek_configured
 from app.db import DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
 

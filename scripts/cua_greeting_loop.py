@@ -16,8 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
-from app.chat_reply import check_degree
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, check_candidate
 
 SESSION_ID = "boss-greeting"
 CHROME_BUNDLE_ID = "com.google.Chrome"
@@ -504,20 +503,8 @@ def process_candidates(
         judged += 1
 
         # ── 筛选判断 ──
-        degree_pass = degree and check_degree(degree, target_degree)
-        school_pass = match_school(school, school_whitelist)
-        passed = degree_pass and school_pass
-
-        # 状态标记
+        passed, fail_reason = check_candidate(school, degree, school_whitelist, target_degree)
         status = "✅" if passed else "  "
-        fail_reason = ""
-        if not passed:
-            parts = []
-            if not degree_pass:
-                parts.append(f"学历不达标({degree}<{target_degree})")
-            if not school_pass:
-                parts.append(f"学校不在白名单({school})")
-            fail_reason = " | ".join(parts)
 
         print(f"  [{judged:>3}/{limit}] {status} {name:10s} | {school:16s} | {degree:4s}"
               + (f" | {fail_reason}" if fail_reason else ""))

@@ -90,72 +90,61 @@ DOMESTIC_ELITE_SCHOOLS = [
     "外交学院", "中国人民公安大学",
 ]
 
-# 海外名校 - 美国
-US_ELITE_SCHOOLS = [
-    "Harvard University", "Massachusetts Institute of Technology", "MIT",
-    "Stanford University", "University of California, Berkeley", "UC Berkeley", "UCB",
-    "California Institute of Technology", "Caltech",
-    "Princeton University", "Yale University",
-    "Columbia University", "University of Pennsylvania", "UPenn",
-    "Cornell University", "University of Chicago", "UChicago",
-    "Duke University", "Northwestern University",
-    "Johns Hopkins University", "JHU",
-    "University of California, Los Angeles", "UCLA",
-    "Carnegie Mellon University", "CMU",
-    "University of Michigan", "UMich",
-    "New York University", "NYU",
-    "University of Washington", "Georgia Institute of Technology", "Georgia Tech",
-    "University of Illinois Urbana-Champaign", "UIUC",
-    "University of Texas at Austin", "UT Austin",
-    "University of Wisconsin-Madison", "Brown University",
-    "Dartmouth College", "Rice University", "Vanderbilt University",
-]
-
-# 海外名校 - 英国
-UK_ELITE_SCHOOLS = [
-    "University of Oxford", "Oxford University", "Oxford",
-    "University of Cambridge", "Cambridge University", "Cambridge",
-    "Imperial College London", "Imperial College",
-    "London School of Economics", "LSE",
-    "University College London", "UCL",
-    "University of Edinburgh", "University of Manchester",
-    "King's College London", "University of Bristol",
-    "University of Warwick",
-]
-
-# 海外名校 - 其他地区
-OTHER_ELITE_SCHOOLS = [
-    # 瑞士
-    "ETH Zurich", "EPFL",
-    # 加拿大
-    "University of Toronto", "University of British Columbia", "UBC",
-    "McGill University", "University of Waterloo",
-    # 新加坡
-    "National University of Singapore", "NUS",
-    "Nanyang Technological University", "NTU",
-    # 日本
-    "University of Tokyo", "Tokyo University",
-    "Kyoto University", "Tokyo Institute of Technology",
-    # 香港
-    "University of Hong Kong", "HKU",
-    "Chinese University of Hong Kong", "CUHK",
-    "Hong Kong University of Science and Technology", "HKUST",
-    # 澳大利亚
-    "University of Melbourne", "Australian National University", "ANU",
-    "University of Sydney", "University of New South Wales", "UNSW",
-    # 欧洲其他
-    "University of Amsterdam", "Technical University of Munich",
-    "LMU Munich", "Heidelberg University",
-    "Sorbonne University", "PSL University",
-    "KU Leuven", "Delft University of Technology",
-    "University of Copenhagen", "Karolinska Institute",
-    # 韩国
-    "Seoul National University", "KAIST",
-    "Yonsei University", "Korea University",
+# 海外名校（仅中文名，匹配 BOSS 直聘显示）
+OVERSEAS_ELITE_SCHOOLS = [
+    # ── 美国 ──
+    "哈佛大学", "麻省理工学院", "斯坦福大学", "加州大学伯克利分校",
+    "加州理工学院", "普林斯顿大学", "耶鲁大学", "哥伦比亚大学",
+    "宾夕法尼亚大学", "康奈尔大学", "芝加哥大学", "杜克大学",
+    "西北大学", "约翰霍普金斯大学", "加州大学洛杉矶分校",
+    "卡内基梅隆大学", "密歇根大学安娜堡分校", "纽约大学",
+    "华盛顿大学", "佐治亚理工学院", "伊利诺伊大学香槟分校",
+    "德克萨斯大学奥斯汀分校", "威斯康星大学麦迪逊分校",
+    "布朗大学", "达特茅斯学院", "莱斯大学", "范德堡大学",
+    "南加州大学", "北卡罗来纳大学教堂山分校",
+    # ── 英国 ──
+    "牛津大学", "剑桥大学", "帝国理工学院", "伦敦政治经济学院",
+    "伦敦大学学院", "爱丁堡大学", "曼彻斯特大学",
+    "伦敦国王学院", "布里斯托大学", "华威大学",
+    "格拉斯哥大学", "伯明翰大学", "南安普顿大学",
+    "利兹大学", "杜伦大学", "谢菲尔德大学", "圣安德鲁斯大学",
+    "诺丁汉大学", "伦敦玛丽女王大学",
+    # ── 瑞士 ──
+    "苏黎世联邦理工学院", "洛桑联邦理工学院",
+    # ── 加拿大 ──
+    "多伦多大学", "英属哥伦比亚大学", "麦吉尔大学",
+    "滑铁卢大学", "阿尔伯塔大学", "蒙特利尔大学",
+    # ── 新加坡 ──
+    "新加坡国立大学", "南洋理工大学",
+    # ── 日本 ──
+    "东京大学", "京都大学", "东京工业大学",
+    "大阪大学", "东北大学（日本）", "名古屋大学",
+    "早稻田大学", "庆应义塾大学",
+    # ── 香港 ──
+    "香港大学", "香港中文大学", "香港科技大学",
+    "香港城市大学", "香港理工大学", "香港浸会大学",
+    # ── 澳大利亚 ──
+    "墨尔本大学", "澳大利亚国立大学", "悉尼大学",
+    "新南威尔士大学", "昆士兰大学", "莫纳什大学",
+    "西澳大学", "阿德莱德大学",
+    # ── 欧洲其他 ──
+    "阿姆斯特丹大学", "慕尼黑工业大学", "慕尼黑大学",
+    "海德堡大学", "索邦大学", "巴黎文理研究大学",
+    "鲁汶大学", "代尔夫特理工大学", "哥本哈根大学",
+    "卡罗林斯卡学院", "苏黎世大学", "柏林洪堡大学",
+    "柏林自由大学", "巴黎综合理工学院", "隆德大学",
+    "奥斯陆大学", "赫尔辛基大学", "乌普萨拉大学",
+    "都柏林圣三一学院", "维也纳大学", "日内瓦大学",
+    # ── 韩国 ──
+    "首尔国立大学", "韩国科学技术院", "延世大学",
+    "高丽大学", "成均馆大学", "浦项科技大学",
+    # ── 其他 ──
+    "莫斯科国立大学", "圣彼得堡国立大学",
+    "奥克兰大学", "特拉维夫大学",
 ]
 
 # 合并全部名校
-_HARDCODED_SCHOOLS = DOMESTIC_ELITE_SCHOOLS + US_ELITE_SCHOOLS + UK_ELITE_SCHOOLS + OTHER_ELITE_SCHOOLS
+_HARDCODED_SCHOOLS = DOMESTIC_ELITE_SCHOOLS + OVERSEAS_ELITE_SCHOOLS
 # 从 JSON 配置加载，文件不存在或无字段时回退到硬编码
 ALL_ELITE_SCHOOLS = _filter_data.get("school_whitelist", _HARDCODED_SCHOOLS)
 
@@ -211,40 +200,46 @@ class FilterCriteria:
 def match_school(candidate_school: str, whitelist: list) -> bool:
     """检查候选人的学校是否匹配白名单中的任一学校
 
-    匹配规则:
-        中文学校名: 完全相等（避免"电子科技大学"误匹配"桂林电子科技大学"）
-        英文学校名: 支持缩写互推 + 包含匹配
-        纯大写缩写: "MIT" <-> "Massachusetts Institute of Technology"
+    全中文匹配，完全相等（避免"电子科技大学"误匹配"桂林电子科技大学"）
     """
     if not candidate_school or not whitelist:
         return False
 
     school = candidate_school.strip()
-    school_lower = school.lower()
-    is_chinese = bool(re.search(r'[一-龥]', school))
 
     for white_school in whitelist:
-        white = white_school.strip()
-        white_lower = white.lower()
-
-        # 完全匹配
-        if school_lower == white_lower:
+        if school == white_school.strip():
             return True
-
-        # 中文学校名: 只做完全匹配，不做包含匹配
-        if is_chinese:
-            continue
-
-        # 英文: 包含匹配 + 缩写匹配
-        if white_lower in school_lower or school_lower in white_lower:
-            return True
-
-        # 纯大写缩写匹配: "MIT" <-> "Massachusetts Institute of Technology"
-        if white.isupper() and len(white) <= 7:
-            words = school_lower.replace(',', '').split()
-            if len(words) >= 2:
-                abbr = ''.join(w[0].upper() for w in words if w[0].isalpha())
-                if white.upper() == abbr:
-                    return True
 
     return False
+
+
+# ══════════════════════════════════════════════════
+# 统一筛选入口 — 所有脚本共用
+# ══════════════════════════════════════════════════
+
+def check_degree(degree: str, min_degree: str = "本科") -> bool:
+    """学历是否达到最低要求（等级比较：硕士≥本科）"""
+    return DEGREE_RANK.get(degree, 0) >= DEGREE_RANK.get(min_degree, 0)
+
+
+def check_candidate(
+    school: str,
+    degree: str,
+    school_whitelist: list = None,
+    min_degree: str = "本科",
+) -> tuple:
+    """统一候选人筛选：学校白名单 + 学历等级
+
+    返回: (passed, fail_reason)
+    """
+    if school_whitelist is None:
+        school_whitelist = ALL_ELITE_SCHOOLS
+
+    if not school or not match_school(school, school_whitelist):
+        return False, f"学校不符 ({school or '未知'} 不在白名单)"
+
+    if degree and not check_degree(degree, min_degree):
+        return False, f"学历不达标 ({degree} < {min_degree})"
+
+    return True, None

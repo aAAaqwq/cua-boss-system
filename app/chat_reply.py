@@ -17,14 +17,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-# ── 学历等级 ──
-
-DEGREE_RANK = {"博士": 4, "硕士": 3, "本科": 2, "大专": 1}
-
-
-def check_degree(degree: str, min_degree: str = "本科") -> bool:
-    """学历是否达到最低要求"""
-    return DEGREE_RANK.get(degree, 0) >= DEGREE_RANK.get(min_degree, 0)
+# ── 学历等级（从 filter_criteria 导入，保持向后兼容）──
+from app.filter_criteria import check_degree, DEGREE_RANK  # noqa: E402
 
 
 # ══════════════════════════════════════════════════
