@@ -304,9 +304,10 @@ def load_job_template() -> dict:
 
 
 def merge_template_metadata(jobs: list[dict]) -> list[dict]:
-    """将 jobs-template.json 中的 category 合并到提取的岗位数据
+    """将 jobs-template.json 中的 id/category 合并到提取的岗位数据
 
-    匹配策略：先按 id 精确匹配，再按 title 模糊匹配
+    匹配策略：先按 id 精确匹配，再按 title 模糊匹配。
+    模板中的 id 覆盖自动生成的 id（模板为权威来源）。
     """
     template = load_job_template()
     if not template:
@@ -321,16 +322,17 @@ def merge_template_metadata(jobs: list[dict]) -> list[dict]:
             job["category"] = template[jid]["category"]
             continue
 
-        # title 模糊匹配（已合并过的 title 也尝试匹配模板 title）
-        matched = None
+        # title 模糊匹配
+        matched_id = None
         for tid, tmeta in template.items():
             ttitle = tmeta.get("template_title", "")
             if ttitle and (ttitle in title or title in ttitle):
-                matched = tmeta
+                matched_id = tid
                 break
-        if matched:
-            job["category"] = matched["category"]
-        # else: 新岗位，category 留空，需手动在 jobs-template.json 添加
+        if matched_id:
+            job["id"] = matched_id  # 模板 id 覆盖自动生成
+            job["category"] = template[matched_id]["category"]
+        # else: 新岗位，id 保留自动生成，category 留空，需手动在 jobs-template.json 添加
 
     return jobs
 
