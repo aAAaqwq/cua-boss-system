@@ -28,6 +28,7 @@ CHROME = "com.google.Chrome"
 JOB_LIST = "https://www.zhipin.com/web/chat/job/list"
 CHAT = "https://www.zhipin.com/web/chat/index"
 CONFIG = Path(__file__).parent.parent / "config" / "jobs.json"
+TEMPLATE_PATH = Path(__file__).parent.parent / "config" / "jobs-template.json"
 
 NAV_LINKS = {
     "职位管理","推荐牛人","搜索","沟通","意向沟通","互动","牛人管理",
@@ -283,6 +284,57 @@ def load_existing_templates():
     return {}, []
 
 
+def load_job_template() -> dict:
+    """从 jobs-template.json 读取手动维护的元数据（id→category 映射）"""
+    if not TEMPLATE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(TEMPLATE_PATH.read_text(encoding="utf-8"))
+        mapping = {}
+        for j in data.get("jobs", []):
+            jid = j.get("id", "")
+            if jid:
+                mapping[jid] = {
+                    "category": j.get("category", ""),
+                    "template_title": j.get("title", ""),
+                }
+        return mapping
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def merge_template_metadata(jobs: list[dict]) -> list[dict]:
+    """将 jobs-template.json 中的 category 合并到提取的岗位数据
+
+    匹配策略：先按 id 精确匹配，再按 title 模糊匹配
+    """
+    template = load_job_template()
+    if not template:
+        return jobs
+
+    for job in jobs:
+        jid = job.get("id", "")
+        title = job.get("title", "")
+
+        # 精确 id 匹配
+        if jid in template:
+            job["category"] = template[jid]["category"]
+            continue
+
+        # title 模糊匹配（已合并过的 title 也尝试匹配模板 title）
+        matched = None
+        for tid, tmeta in template.items():
+            ttitle = tmeta.get("template_title", "")
+            if ttitle and (ttitle in title or title in ttitle):
+                matched = tmeta
+                break
+        if matched:
+            job["category"] = matched["category"]
+        # else: 新岗位，category 留空，需手动在 jobs-template.json 添加
+
+    return jobs
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser()
@@ -407,9 +459,10 @@ def main():
     if not extracted:
         print("\n❌ 未提取到任何岗位"); sys.exit(1)
 
-    # ④ 去重 + 合并话术
+    # ④ 去重 + 合并模板元数据 + 合并话术
     print(f"\n④ 处理...")
     extracted = dedup(extracted)
+    extracted = merge_template_metadata(extracted)
     old_templates, fallback = load_existing_templates()
 
     for j in extracted:
@@ -426,8 +479,10 @@ def main():
 
     print(f"\n  {len(extracted)} 个岗位:")
     for j in extracted:
+        category = j.get("category", "")
+        cat_str = f" [{category}]" if category else " [⚠ 无category,请更新jobs-template.json]"
         reqs = (j.get("requirements", "") or "")[:80]
-        print(f"  ✅ {j['title']:35s} | {reqs}")
+        print(f"  ✅ {j['title']:35s}{cat_str} | {reqs}")
 
     if args.dry_run:
         print(f"\n⚠ 预览 — 未写入")

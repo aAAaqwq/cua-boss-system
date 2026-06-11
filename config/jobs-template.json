@@ -1,0 +1,20 @@
+{
+  "description": "岗位元数据模板 — 手动维护 id/category，sync 脚本按 title 或 id 匹配后合并到 jobs.json",
+  "jobs": [
+    {
+      "id": "dev",
+      "title": "开发",
+      "category": "tech"
+    },
+    {
+      "id": "annotation",
+      "title": "(标注)线上获客与网红合作总监",
+      "category": "nontech"
+    },
+    {
+      "id": "annotation-2",
+      "title": "CEO标注助理",
+      "category": "nontech"
+    }
+  ]
+}
