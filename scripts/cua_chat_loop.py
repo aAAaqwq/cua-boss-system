@@ -27,7 +27,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, match_school
-from app.chat_reply import load_jobs_config, generate_reply, check_degree, detect_job
+from app.chat_reply import load_jobs_config, generate_reply, check_degree, detect_job, check_deepseek_configured
 from app.db import DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
 
@@ -1185,6 +1185,10 @@ def main():
     print(f"模式: {'预览(dry-run)' if args.dry_run else '执行'} | "
           f"{job_count}个岗位 | {tpl_count}条话术")
     print("=" * 60)
+
+    # 启动时检查 DeepSeek 配置（未配置时打印醒目警告，后续不再重复）
+    if not args.dry_run:
+        check_deepseek_configured()
 
     # ── 初始化 ──
     start_session()

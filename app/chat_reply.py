@@ -297,6 +297,25 @@ def _get_deepseek_config() -> dict:
     }
 
 
+# 模块级缓存：首次检查后记住结果，避免重复读 .env
+_deepseek_configured: Optional[bool] = None
+
+
+def check_deepseek_configured() -> bool:
+    """检查 DeepSeek API 是否已配置，未配置时打印醒目警告（仅首次调用）"""
+    global _deepseek_configured
+    if _deepseek_configured is not None:
+        return _deepseek_configured
+    cfg = _get_deepseek_config()
+    _deepseek_configured = bool(cfg["api_key"])
+    if not _deepseek_configured:
+        print("=" * 60)
+        print("⚠️  DeepSeek API 未配置！所有智能回复将降级为模板原文")
+        print("    cp .env.example .env 并填入 DEEPSEEK_API_KEY")
+        print("=" * 60)
+    return _deepseek_configured
+
+
 def call_deepseek(
     candidate_name: str,
     candidate_message: str,
@@ -417,7 +436,7 @@ def generate_reply(
         template_hint = match_template(message, templates, all_fallback, job=job)
 
     # 2. 尝试 DeepSeek 智能生成（模板作提示词 + 聊天上下文）
-    if template_hint or True:  # 总是尝试 DeepSeek（如果已配置）
+    if check_deepseek_configured():
         reply, err = call_deepseek(
             candidate_name, message, history,
             job_context=job_context,
@@ -426,8 +445,8 @@ def generate_reply(
         )
         if reply:
             return reply
-        if err:
-            print(f"    ⚠ DeepSeek 调用失败: {err}")
+        # API 调用失败（非配置问题）→ 警告
+        print(f"    ⚠ DeepSeek 调用失败: {err}")
 
     # 3. DeepSeek 不可用 — 降级返回模板原文
     if template_hint:
