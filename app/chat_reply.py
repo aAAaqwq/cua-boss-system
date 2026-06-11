@@ -6,8 +6,10 @@
 零 pip 依赖，纯标准库。
 
 配置:
-  config/jobs.json  — 岗位定义 + 专属话术模板（推荐）
-  config/templates.json — 话术模板（三层：岗位专属 → 类别 → 兜底）
+  config/reply-templates.json — 话术模板参考（提交到 git）
+  config/reply.json          — 本地话术配置（gitignore，运行时读取）
+  config/jobs.json           — 岗位定义（同步自 BOSS）
+  config/jobs-template.json  — 岗位元数据模板（手动维护 id/category）
 """
 import json
 import os
@@ -32,7 +34,8 @@ def check_degree(degree: str, min_degree: str = "本科") -> bool:
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 DEFAULT_JOBS_CONFIG = CONFIG_DIR / "jobs.json"
-DEFAULT_TEMPLATES_CONFIG = CONFIG_DIR / "templates.json"
+DEFAULT_TEMPLATES_CONFIG = CONFIG_DIR / "reply.json"
+TEMPLATES_FALLBACK = CONFIG_DIR / "reply-templates.json"
 
 
 def _sort_templates(templates: list[dict]) -> list[dict]:
@@ -43,8 +46,7 @@ def _sort_templates(templates: list[dict]) -> list[dict]:
 def load_jobs_config(config_path: Optional[str] = None) -> dict:
     """加载岗位配置 + 话术模板
 
-    优先: templates.json + jobs.json（双文件模式）
-    兜底: jobs.json 内嵌 templates（v4-v5 兼容）
+    读取 reply.json（本地，gitignore）→ 不存在则用 reply-templates.json 兜底
 
     返回:
       {
@@ -63,9 +65,12 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
     """
     config_dir = Path(config_path).parent if config_path else CONFIG_DIR
     jobs_path = Path(config_path) if config_path else DEFAULT_JOBS_CONFIG
-    templates_path = config_dir / "templates.json"
+    # reply.json 优先（本地自定义），不存在则用 reply-templates.json 兜底
+    templates_path = config_dir / "reply.json"
+    if not templates_path.exists():
+        templates_path = config_dir / "reply-templates.json"
 
-    # ── 模式1: templates.json + jobs.json 双文件 ──
+    # ── 模式1: reply.json + jobs.json 双文件 ──
     if templates_path.exists() and jobs_path.exists():
         try:
             tpl_data = json.loads(templates_path.read_text(encoding="utf-8"))

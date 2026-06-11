@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 *.log
 .env
+# 本地话术配置（从 reply-templates.json 复制后自定义，gitignore）
+reply.json
