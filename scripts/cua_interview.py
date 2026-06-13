@@ -493,21 +493,20 @@ def click_time_option(hour: int, minute: int, pid: int, wid: int) -> bool:
         var container = document.querySelector('.time-range-container');
         if (!container) return JSON.stringify({{error:'no time picker'}});
         var lis = container.querySelectorAll('li');
-        var hourCount = 13;  // 08-20
-        var minCount = 12;   // 00-55 (step 5)
+        var HC = 13;  // hour count 08-20
 
-        if (lis.length >= hourCount + minCount) {{
+        if (lis.length >= 25) {{
             // Click hour (first column)
             lis[{hour_idx}].click();
             lis[{hour_idx}].dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
 
-            // Click minute (second column, offset by hourCount)
-            lis[{hour_count} + {min_idx}].click();
-            lis[{hour_count} + {min_idx}].dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
+            // Click minute (second column, offset by hour count)
+            lis[HC + {min_idx}].click();
+            lis[HC + {min_idx}].dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
 
             return JSON.stringify({{status:'clicked',
                 hour: lis[{hour_idx}].textContent.trim(),
-                min: lis[{hour_count} + {min_idx}].textContent.trim()}});
+                min: lis[HC + {min_idx}].textContent.trim()}});
         }}
         return JSON.stringify({{error:'not enough li', count: lis.length}});
     }})()
