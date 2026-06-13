@@ -327,21 +327,25 @@ def select_interview_type(interview_type: str, pid: int, wid: int) -> bool:
                         time.sleep(0.3)
                         return True
 
-    # Fallback: JS click on radio label
-    print(f"  ⚠ AXRadioButton 未找到，尝试 JS...")
+    # Fallback: JS click on radio label — use the interview-invite-ui form scope
+    print(f"  ⚠ AXRadioButton 未找到，JS 点击...")
+    type_text = INTERVIEW_TYPE_TEXTS.get(interview_type, [interview_type])
+    search_text = type_text[0]
     r = _js(pid, wid, f"""
     (function(){{
-        var all = document.querySelectorAll('*');
+        var form = document.querySelector('.interview-invite-ui');
+        if (!form) form = document;
+        var all = form.querySelectorAll('*');
         for (var i = 0; i < all.length; i++) {{
             var el = all[i];
-            if ((el.textContent || '').trim() === '{type_texts[0]}' &&
-                el.offsetWidth > 0) {{
+            var t = (el.textContent || '').trim();
+            if (t === '{search_text}' && el.offsetWidth > 0 && el.offsetWidth < 200) {{
                 el.click();
                 el.dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
-                return JSON.stringify({{clicked:true}});
+                return JSON.stringify({{clicked:true, text:t, tag:el.tagName}});
             }}
         }}
-        return JSON.stringify({{clicked:false}});
+        return JSON.stringify({{clicked:false, searched:'{search_text}'}});
     }})()
     """)
     return isinstance(r, dict) and r.get("clicked") is True
