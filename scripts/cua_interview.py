@@ -623,13 +623,6 @@ def schedule_interview(
 
     print("  ✓ 面试邀请表单已打开")
 
-    # Dry-run: dump form and exit
-    if dry_run:
-        print("\n  🔍 [DRY-RUN] 表单结构:")
-        _dump_ax_tree(pid, wid, "interview-form", max_lines=60)
-        return {"status": "dry_run", "uid": uid, "name": name,
-                "step": "form_detected", "error": None}
-
     # ④ Select interview type
     print(f"\n④ 选择面试类型: {interview_type}")
     if not select_interview_type(interview_type, pid, wid):
@@ -656,7 +649,13 @@ def schedule_interview(
     print(f"  ✓ 已选择时间")
     time.sleep(0.3)
 
-    # ⑦ Submit
+    # ⑦ Submit (skip in dry-run)
+    if dry_run:
+        print(f"\n  🔍 [DRY-RUN] 表单已完整填写（未发送）")
+        print(f"     类型: {interview_type} | 日期: {date_str} | 时间: {time_str}")
+        return {"status": "dry_run", "uid": uid, "name": name,
+                "step": "form_filled", "error": None}
+
     print(f"\n⑦ 发送面试邀请...")
     if not click_send_button(pid, wid):
         return fail("submit", "无法点击发送按钮")
