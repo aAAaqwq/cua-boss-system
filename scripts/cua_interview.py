@@ -348,28 +348,58 @@ def select_interview_type(interview_type: str, pid: int, wid: int) -> bool:
 
 
 def open_date_picker(pid: int, wid: int) -> bool:
-    """Click the date picker field to expand the calendar."""
-    # Click via AX element index (find AXTextField "选择日期")
+    """Click the date picker field to expand the calendar, then verify."""
+    # Find the date input — look for placeholder="选择日期"
+    r = _js(pid, wid, """
+    (function(){
+        var input = document.querySelector('input[placeholder*="选择日期"]');
+        if (input) {
+            input.click();
+            input.focus();
+            return JSON.stringify({status:'clicked', via:'js'});
+        }
+        return JSON.stringify({status:'not_found'});
+    })()
+    """)
+    if isinstance(r, dict) and r.get("status") == "clicked":
+        print("    日期选择器已打开 (JS)")
+        time.sleep(1)
+        # Verify calendar expanded
+        return _wait_calendar_expanded(pid, wid)
+
+    # Fallback: AX click
     idx = _find_element_index("选择日期", pid, wid)
     if idx:
-        print(f"  打开日期选择器 (idx={idx})")
+        print(f"    尝试 AX 点击日期字段 (idx={idx})")
         cua("click", json.dumps({
             "pid": pid, "window_id": wid, "element_index": idx,
         }))
-        time.sleep(0.5)
-        return True
+        time.sleep(1)
+        return _wait_calendar_expanded(pid, wid)
+    return False
 
-    # Fallback: JS click
-    _js(pid, wid, """
-    (function(){
-        var dp = document.querySelector('.datepicker-wrap');
-        if (dp) { dp.click(); return JSON.stringify({clicked:true}); }
-        var input = document.querySelector('input[placeholder*="选择日期"]');
-        if (input) { input.click(); return JSON.stringify({clicked:true}); }
-        return JSON.stringify({clicked:false});
-    })()
-    """)
-    return True  # assume success for now
+
+def _wait_calendar_expanded(pid: int, wid: int, timeout: float = 3.0) -> bool:
+    """Wait for the calendar day cells to appear."""
+    for _ in range(int(timeout * 2)):
+        time.sleep(0.5)
+        r = _js(pid, wid, """
+        (function(){
+            var cells = document.querySelectorAll('.cell.day');
+            if (cells.length > 5) {
+                var enabled = 0;
+                for (var i = 0; i < cells.length; i++) {
+                    if (cells[i].className.indexOf('disabled') === -1) enabled++;
+                }
+                return JSON.stringify({expanded:true, total:cells.length, enabled:enabled});
+            }
+            return JSON.stringify({expanded:false, total:cells.length});
+        })()
+        """)
+        if isinstance(r, dict) and r.get("expanded"):
+            print(f"    日历已展开 ({r.get('total')} 格, {r.get('enabled')} 可选)")
+            return True
+    return False
 
 
 def click_calendar_day(day: int, pid: int, wid: int) -> bool:
@@ -402,27 +432,51 @@ def click_calendar_day(day: int, pid: int, wid: int) -> bool:
 
 
 def open_time_picker(pid: int, wid: int) -> bool:
-    """Click the time picker field to expand time selection."""
+    """Click the time picker field to expand time selection, then verify."""
+    r = _js(pid, wid, """
+    (function(){
+        var input = document.querySelector('input.time-select');
+        if (input) {
+            input.click();
+            input.focus();
+            return JSON.stringify({status:'clicked', via:'js'});
+        }
+        return JSON.stringify({status:'not_found'});
+    })()
+    """)
+    if isinstance(r, dict) and r.get("status") == "clicked":
+        print("    时间选择器已打开 (JS)")
+        time.sleep(1)
+        return _wait_time_expanded(pid, wid)
+
+    # Fallback: AX click
     idx = _find_element_index("选择开始时间", pid, wid)
     if idx:
-        print(f"  打开时间选择器 (idx={idx})")
+        print(f"    尝试 AX 点击时间字段 (idx={idx})")
         cua("click", json.dumps({
             "pid": pid, "window_id": wid, "element_index": idx,
         }))
-        time.sleep(0.5)
-        return True
+        time.sleep(1)
+        return _wait_time_expanded(pid, wid)
+    return False
 
-    # Fallback: JS
-    _js(pid, wid, """
-    (function(){
-        var input = document.querySelector('input.time-select');
-        if (input) { input.click(); return JSON.stringify({clicked:true}); }
-        var ts = document.querySelector('.time-select-container');
-        if (ts) { ts.click(); return JSON.stringify({clicked:true}); }
-        return JSON.stringify({clicked:false});
-    })()
-    """)
-    return True
+
+def _wait_time_expanded(pid: int, wid: int, timeout: float = 3.0) -> bool:
+    """Wait for time picker <li> items to appear."""
+    for _ in range(int(timeout * 2)):
+        time.sleep(0.5)
+        r = _js(pid, wid, """
+        (function(){
+            var container = document.querySelector('.time-range-container');
+            if (!container) return JSON.stringify({expanded:false});
+            var lis = container.querySelectorAll('li');
+            return JSON.stringify({expanded:lis.length >= 20, count:lis.length});
+        })()
+        """)
+        if isinstance(r, dict) and r.get("expanded"):
+            print(f"    时间选择器已展开 ({r.get('count')} 选项)")
+            return True
+    return False
 
 
 def click_time_option(hour: int, minute: int, pid: int, wid: int) -> bool:
@@ -615,17 +669,34 @@ def schedule_interview(
     print(f"\n④ 选择面试类型: {interview_type}")
     if not select_interview_type(interview_type, pid, wid):
         return fail("select_type", f"无法选择面试类型: {interview_type}")
-    time.sleep(0.5)
+    # BOSS re-renders form fields after type switch — wait for DOM to stabilize
+    time.sleep(1.5)
 
     # ⑤ Fill date
     print(f"\n⑤ 选择面试日期: {date_str}")
     if not open_date_picker(pid, wid):
         return fail("open_date", "无法打开日期选择器")
-    time.sleep(0.5)
     if not click_calendar_day(day_int, pid, wid):
         return fail("click_day", f"无法点击日期: {day_int}")
-    print(f"  ✓ 已选择日期")
-    time.sleep(0.3)
+    # Verify date was actually set
+    r = _js(pid, wid, """
+    (function(){
+        var input = document.querySelector('input[placeholder*="选择日期"]');
+        if (input && input.value && input.value.indexOf('选择') === -1) {
+            return JSON.stringify({set:true, value:input.value});
+        }
+        // Check if datepicker shows the selected date
+        var dp = document.querySelector('.datepicker-wrap input');
+        if (dp && dp.value && dp.value.indexOf('选择') === -1) {
+            return JSON.stringify({set:true, value:dp.value});
+        }
+        return JSON.stringify({set:false});
+    })()
+    """)
+    if not (isinstance(r, dict) and r.get("set")):
+        print("  ⚠ 日期可能未设置，继续...")
+    else:
+        print(f"  ✓ 已选择日期: {r.get('value', date_str)}")
 
     # ⑥ Fill time
     print(f"\n⑥ 选择面试时间: {time_str}")
