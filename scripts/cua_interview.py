@@ -426,68 +426,56 @@ def open_time_picker(pid: int, wid: int) -> bool:
 
 
 def click_time_option(hour: int, minute: int, pid: int, wid: int) -> bool:
-    """Click hour and minute in the expanded time picker popup."""
-    # The time picker has hour column (08-20) and minute column (00-55, step 5)
-    hour_str = str(hour).zfill(2)
-    min_str = str(minute).zfill(2)
+    """Click hour and minute in the expanded time picker popup.
+    The time picker has two <ul> columns: hours (08-20) and minutes (00-55, step 5).
+    We click by LI index: hour index = hour-8, minute index = minute/5 + hour_count."""
+    # Hour list: 08,09,10,11,12,13,14,15,16,17,18,19,20 (13 items, index 0-12)
+    hour_idx = hour - 8
+    # Minute list: 00,05,10,15,20,25,30,35,40,45,50,55 (12 items, index 0-11)
+    min_idx = minute // 5
 
     r = _js(pid, wid, f"""
     (function(){{
         var container = document.querySelector('.time-range-container');
-        if (!container) return JSON.stringify({{error:'time picker not found'}});
+        if (!container) return JSON.stringify({{error:'no time picker'}});
+        var lis = container.querySelectorAll('li');
+        var hourCount = 13;  // 08-20
+        var minCount = 12;   // 00-55 (step 5)
 
-        // Click hour
-        var all = container.querySelectorAll('*');
-        var hourClicked = false, minClicked = false;
-        for (var i = 0; i < all.length; i++) {{
-            var el = all[i];
-            var t = (el.textContent || '').trim();
-            if (t === '{hour_str}' && el.children.length === 0 && el.offsetWidth > 0) {{
-                el.click();
-                el.dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
-                hourClicked = true;
-                break;
-            }}
+        if (lis.length >= hourCount + minCount) {{
+            // Click hour (first column)
+            lis[{hour_idx}].click();
+            lis[{hour_idx}].dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
+
+            // Click minute (second column, offset by hourCount)
+            lis[{hour_count} + {min_idx}].click();
+            lis[{hour_count} + {min_idx}].dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
+
+            return JSON.stringify({{status:'clicked',
+                hour: lis[{hour_idx}].textContent.trim(),
+                min: lis[{hour_count} + {min_idx}].textContent.trim()}});
         }}
-        // Wait a tiny bit for the minute column to update if needed
-        setTimeout(function(){{}}, 100);
-        // Click minute
-        for (var i = 0; i < all.length; i++) {{
-            var el = all[i];
-            var t = (el.textContent || '').trim();
-            if (t === '{min_str}' && el.children.length === 0 && el.offsetWidth > 0) {{
-                el.click();
-                el.dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
-                minClicked = true;
-                break;
-            }}
-        }}
-        return JSON.stringify({{hourClicked: hourClicked, minClicked: minClicked}});
+        return JSON.stringify({{error:'not enough li', count: lis.length}});
     }})()
     """)
-    if isinstance(r, dict):
-        if r.get("hourClicked") and r.get("minClicked"):
-            return True
-        # Retry: click each one with delay between
-        if r.get("hourClicked"):
-            time.sleep(0.2)
-            r2 = _js(pid, wid, f"""
-            (function(){{
-                var container = document.querySelector('.time-range-container');
-                if (!container) return JSON.stringify({{error:'not found'}});
-                var all = container.querySelectorAll('*');
-                for (var i = 0; i < all.length; i++) {{
-                    var el = all[i];
-                    if ((el.textContent||'').trim()==='{min_str}'&&el.children.length===0&&el.offsetWidth>0){{
-                        el.click();
-                        el.dispatchEvent(new MouseEvent('click',{{bubbles:true}}));
-                        return JSON.stringify({{minClicked:true}});
-                    }}
-                }}
-                return JSON.stringify({{minClicked:false}});
-            }})()
-            """)
-            return isinstance(r2, dict) and r2.get("minClicked") is True
+    if isinstance(r, dict) and r.get("status") == "clicked":
+        return True
+    # Fallback: search by text and click
+    hour_str = str(hour).zfill(2)
+    min_str = str(minute).zfill(2)
+    r2 = _js(pid, wid, f"""
+    (function(){{
+        var container = document.querySelector('.time-range-container');
+        if (!container) return JSON.stringify({{error:'no container'}});
+        var lis = container.querySelectorAll('li');
+        var results = [];
+        for (var i = 0; i < lis.length; i++) {{
+            results.push(lis[i].textContent.trim());
+        }}
+        return JSON.stringify({{texts: results}});
+    }})()
+    """)
+    print(f"    时间选择器内容: {r2}")
     return False
 
 
