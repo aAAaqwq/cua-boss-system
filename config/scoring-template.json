@@ -1,11 +1,26 @@
 {
-  "version": 2,
-  "description": "候选人评分维度配置 — 按岗位类别设默认维度+权重，具体岗位可覆盖。所有维度统一走 AI 评分，总分 100。",
+  "version": 3,
+  "description": "候选人评分细则（统一可改）— 维度/权重/评级线/输入上限全在此文件，改这里即生效，无需动代码。所有维度统一走 AI 评分，总分 100。",
 
   "scoring_scale": {
     "min": 0,
     "max": 10,
     "description": "每个维度打 0-10 分，加权后汇总为百分制"
+  },
+
+  "grades": [
+    {"min": 85, "label": "S", "desc": "强烈推荐"},
+    {"min": 70, "label": "A", "desc": "推荐"},
+    {"min": 55, "label": "B", "desc": "可考虑"},
+    {"min": 40, "label": "C", "desc": "待定"},
+    {"min": 0,  "label": "D", "desc": "不推荐"}
+  ],
+
+  "input_limits": {
+    "description": "传给 DeepSeek 的候选人详细数据上限 + 重新评分窗口",
+    "resume_max_chars": 4000,
+    "chat_max_turns": 30,
+    "rescore_window_days": 2
   },
 
   "category_defaults": {

@@ -7,3 +7,11 @@ __pycache__/
 reply.json
 # 本地筛选配置（从 filter-template.json 复制后自定义）
 filter.json
+# 本地评分配置（从 scoring-template.json 复制后自定义）
+scoring.json
+# 本地岗位配置（从 jobs-template.json 复制后自定义）
+jobs.json
+# 数据库备份（含真实候选人数据，不提交）
+data/backups/
+# 候选人简历（含真实 PII，不提交）
+data/resumes/

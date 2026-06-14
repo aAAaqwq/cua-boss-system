@@ -38,13 +38,14 @@ NAV_LINKS = {
 
 ID_MAP = [
     ("首席科学家","chief-scientist"),("技术合伙人","tech-partner"),
-    ("合伙人","partner"),("技术总监","tech-director"),
-    ("全栈","ai-fullstack"),("产品经理","ai-product-manager"),
-    ("运营实习生","ai-ops-intern"),("运营","ai-ops-intern"),
-    ("技术实习生","tech-intern"),("实习","tech-intern"),
-    ("开发","dev"),("标注","annotation"),("总监","director"),
-    ("助理","assistant"),("销售","sales"),("咨询","consulting"),
+    ("运营实习生","ai-ops-intern"),("技术实习生","tech-intern"),
+    ("产品经理","ai-product-manager"),("技术总监","tech-director"),
+    ("合伙人","partner"),("全栈","ai-fullstack"),
+    ("运营","ai-ops-intern"),("开发","dev"),("标注","annotation"),
+    ("总监","director"),("助理","assistant"),("销售","sales"),
+    ("咨询","consulting"),("实习","tech-intern"),
 ]
+# ↑ 按 key 长度降序排列：长的优先匹配，避免 "全栈开发" 被 "开发" 误匹配
 
 
 def cua(*args):
@@ -101,7 +102,7 @@ def nav_to(url, pid, wid, check_fn, timeout=25):
 
 
 def has_edit_links(pid, wid):
-    return len(re.findall(r'AXLink\s*\(\s*编辑\s*\)', ax_tree(pid, wid))) >= 3
+    return len(re.findall(r'AXLink\s*\(\s*编辑\s*\)', ax_tree(pid, wid))) >= 1
 
 
 def has_textarea(pid, wid):
@@ -179,11 +180,23 @@ def extract_edit_page(pid, wid):
     AX 树在 iframe 内容上会截断 → 职位描述用 JS 直接读 textarea.value
     """
     tree = ax_tree(pid, wid)
-    result = {"title": "", "requirements": "", "salary": "", "degree": "", "location": ""}
-    salary_parts, text_fields = [], []
+    result = {
+        "title": "", "requirements": "", "salary": "",
+        "degree": "", "location": "", "experience": "",
+    }
+    salary_tokens = []  # AXStaticText 字符串序列（如 ["40k","-","55k"] 或 ["120","-","180","元/天"]）
+    in_salary_section = False
+    salary_done = False  # 只取第一个薪资块（页面有重复预览）
+    text_fields = []
+
+    # 薪资区域结束标志（遇到这些即退出薪资 token 收集）
+    SALARY_BOUNDARY = {
+        "职位关键词", "工作地点", "奖金绩效", "职位类型",
+        "职位要求", "补充信息", "实习要求",
+    }
 
     for line in tree.split("\n"):
-        # AXTextField — title / location
+        # AXTextField — location
         m = re.search(r'AXTextField\s*=\s*"([^"]+)"', line)
         if m and m.group(1) and "zhipin.com" not in m.group(1) and "/" not in m.group(1):
             val = m.group(1)
@@ -191,28 +204,94 @@ def extract_edit_page(pid, wid):
             if re.search(r'[区路街大厦座层号\d]', val) and len(val) > 5:
                 result["location"] = val
 
-        # 学历
+        # 学历 — AXStaticText 精确匹配
         m = re.search(r'AXStaticText\s*=\s*"(博士|硕士|本科|大专)"', line)
-        if m and not result["degree"]: result["degree"] = m.group(1)
+        if m and not result["degree"]:
+            result["degree"] = m.group(1)
 
-        # 薪资
-        m = re.search(r'AXStaticText\s*=\s*"(\d{1,3}k)"', line, re.IGNORECASE)
-        if m: salary_parts.append(m.group(1).lower())
+        # 经验
+        m = re.search(r'AXStaticText\s*=\s*"([^"]*[年应届].*)"', line)
+        if m and not result["experience"]:
+            val = m.group(1)
+            if val not in ("1", "2", "职位管理", "招聘规范", "推荐牛人"):
+                result["experience"] = val
 
-    # 推断 title
-    candidates = []
-    for f in text_fields:
-        if not re.search(r'[一-鿿]', f): continue
-        if re.match(r'^[a-zA-Z0-9\s\-\.@_]+$', f): continue
-        if re.search(r'[区路街大厦座层号]', f) and len(f) > 8: continue
-        candidates.append(f)
-    if candidates:
-        result["title"] = min(candidates, key=len)
+        # 薪资区域: 只取第一个 "薪资范围" 块（页面有重复的预览副本）
+        if not in_salary_section and not salary_done and re.search(r'AXStaticText\s*=\s*"薪资范围"', line):
+            in_salary_section = True
+            continue
+        if in_salary_section:
+            # 遇到边界标志则结束第一个薪资块
+            m_bound = re.search(r'AXStaticText\s*=\s*"([^"]+)"', line)
+            if m_bound and m_bound.group(1) in SALARY_BOUNDARY:
+                in_salary_section = False
+                salary_done = True
+                continue
+            # 只收集薪资相关的 AXStaticText
+            m_st = re.search(r'AXStaticText\s*=\s*"([^"]+)"', line)
+            if m_st:
+                val = m_st.group(1)
+                # K 格式: "40k", "55k"
+                if re.match(r'^\d+[kK]$', val):
+                    salary_tokens.append(val.lower())
+                # 分隔符
+                elif re.match(r'^[~\-—–]$', val):
+                    salary_tokens.append("-")
+                # 纯数字（元格式的 120, 180）
+                elif re.match(r'^\d+$', val) and len(val) <= 4:
+                    salary_tokens.append(val)
+                # 单位
+                elif re.match(r'^元/[天月]$', val):
+                    salary_tokens.append(val)
 
-    # 组装薪资
-    kps = [s for s in salary_parts if s.endswith('k')]
-    if len(kps) >= 2: result["salary"] = f"{kps[0]}-{kps[1]}".upper()
-    elif len(kps) == 1: result["salary"] = kps[0].upper()
+    # 解析: 找 "-" 分隔或自动配对
+    if salary_tokens:
+        delim_idx = next((i for i, t in enumerate(salary_tokens) if t == "-"), -1)
+        if delim_idx > 0:
+            lo_tokens = salary_tokens[:delim_idx]
+            hi_tokens = salary_tokens[delim_idx+1:]
+        else:
+            lo_tokens = salary_tokens
+            hi_tokens = []
+
+        # K 格式: tokens 含 "12k", "18k" 等
+        k_vals = [t for t in salary_tokens if re.match(r'^\d+[kK]$', t)]
+        if k_vals:
+            if delim_idx >= 0:
+                lo_k = [t for t in lo_tokens if re.match(r'^\d+[kK]$', t)]
+                hi_k = [t for t in hi_tokens if re.match(r'^\d+[kK]$', t)]
+                lo = "".join(lo_k).upper()
+                hi = "".join(hi_k).upper()
+            else:
+                # 无分隔符: 前两个 K 值作为范围（BOSS 用下拉箭头分隔）
+                if len(k_vals) >= 2:
+                    lo, hi = k_vals[0].upper(), k_vals[1].upper()
+                else:
+                    lo, hi = k_vals[0].upper(), ""
+            if lo and hi:
+                result["salary"] = f"{lo}-{hi}"
+            elif lo:
+                result["salary"] = lo
+
+        # 元格式: tokens 含 "元/天" 或 "元/月"
+        elif any("元/" in t for t in salary_tokens):
+            unit = next((t for t in salary_tokens if "元/" in t), "")
+            nums = [t for t in salary_tokens if re.match(r'^\d+$', t)]
+            if delim_idx >= 0:
+                lo_nums = [t for t in lo_tokens if re.match(r'^\d+$', t)]
+                hi_nums = [t for t in hi_tokens if re.match(r'^\d+$', t)]
+                lo = "".join(lo_nums)
+                hi = "".join(hi_nums)
+            else:
+                # 无分隔符: 前两个数字作为范围
+                if len(nums) >= 2:
+                    lo, hi = nums[0], nums[1]
+                else:
+                    lo, hi = nums[0] if nums else "", ""
+            if lo and hi:
+                result["salary"] = f"{lo}-{hi}{unit}"
+            elif lo:
+                result["salary"] = f"{lo}{unit}"
 
     # ★ 职位描述: JS 直读 iframe 内 textarea（AX 树会截断 iframe 内容）
     # 注意: cua() 对非 JSON 返回值截断 200 字 → JS 必须返回 JSON 字符串
@@ -240,6 +319,22 @@ def extract_edit_page(pid, wid):
     js_text = r.get("text", "") if isinstance(r, dict) else ""
     if js_text and len(js_text) > 5:
         result["requirements"] = js_text.strip()
+
+    # 薪资兜底: 从 requirements 文本中匹配
+    if not result["salary"] and result["requirements"]:
+        reqs = result["requirements"]
+        # 匹配 "16K-30K" / "12K" 格式
+        m = re.search(r'(\d{1,3}[Kk]\s*[-–—~]\s*\d{1,3}[Kk])', reqs)
+        if m:
+            result["salary"] = m.group(1).upper().replace(" ", "")
+        else:
+            m = re.search(r'(\d{1,3}[Kk])', reqs)
+            if m:
+                result["salary"] = m.group(1).upper()
+        # 匹配 "1000-9000元/月" / "120-180元/天"
+        if not result["salary"]:
+            m = re.search(r'(\d+[-–—~]\d+元/[天月])', reqs)
+            if m: result["salary"] = m.group(1)
 
     # 学历兜底
     if not result["degree"] and result["requirements"]:
@@ -285,7 +380,7 @@ def load_existing_templates():
 
 
 def load_job_template() -> dict:
-    """从 jobs-template.json 读取手动维护的元数据（id→category 映射）"""
+    """从 jobs-template.json 读取手动维护的元数据（id→title 映射）"""
     if not TEMPLATE_PATH.exists():
         return {}
     try:
@@ -295,7 +390,6 @@ def load_job_template() -> dict:
             jid = j.get("id", "")
             if jid:
                 mapping[jid] = {
-                    "category": j.get("category", ""),
                     "template_title": j.get("title", ""),
                 }
         return mapping
@@ -304,10 +398,10 @@ def load_job_template() -> dict:
 
 
 def merge_template_metadata(jobs: list[dict]) -> list[dict]:
-    """将 jobs-template.json 中的 id/category 合并到提取的岗位数据
+    """将 jobs-template.json 中的 id 覆盖合并到提取的岗位数据
 
-    匹配策略：先按 id 精确匹配，再按 title 模糊匹配。
-    模板中的 id 覆盖自动生成的 id（模板为权威来源）。
+    策略: 模板 title 精确匹配 → 模板 id 权威覆盖。
+    模糊匹配不覆盖 id（避免不同岗位被错误合并到同一 id）。
     """
     template = load_job_template()
     if not template:
@@ -317,22 +411,32 @@ def merge_template_metadata(jobs: list[dict]) -> list[dict]:
         jid = job.get("id", "")
         title = job.get("title", "")
 
-        # 精确 id 匹配
-        if jid in template:
-            job["category"] = template[jid]["category"]
-            continue
-
-        # title 模糊匹配
-        matched_id = None
+        # 模板 title 精确匹配 → 模板 id 权威覆盖
         for tid, tmeta in template.items():
             ttitle = tmeta.get("template_title", "")
-            if ttitle and (ttitle in title or title in ttitle):
-                matched_id = tid
+            if ttitle == title:
+                job["id"] = tid
                 break
-        if matched_id:
-            job["id"] = matched_id  # 模板 id 覆盖自动生成
-            job["category"] = template[matched_id]["category"]
-        # else: 新岗位，id 保留自动生成，category 留空，需手动在 jobs-template.json 添加
+
+    # 去重检查: 检测是否有两个不同 title 的岗位共享同一 id
+    id_titles = {}
+    for job in jobs:
+        jid = job.get("id", "")
+        title = job.get("title", "")
+        if jid not in id_titles:
+            id_titles[jid] = []
+        id_titles[jid].append(title)
+    for jid, titles in id_titles.items():
+        if len(titles) > 1:
+            # 碰撞: 给后面的岗位追加后缀
+            for job in jobs:
+                if job.get("id") == jid and job.get("title") != titles[0]:
+                    suffix = 2
+                    new_id = f"{jid}-{suffix}"
+                    while any(j.get("id") == new_id for j in jobs):
+                        suffix += 1
+                        new_id = f"{jid}-{suffix}"
+                    job["id"] = new_id
 
     return jobs
 
@@ -435,17 +539,17 @@ def main():
         time.sleep(2)
 
         detail = extract_edit_page(pid, wid)
-        if not detail.get("title"):
-            print(f"    ⚠ 无 title，跳过"); continue
+        # 以列表页 title 为准（编辑页表单字段提取不准）
+        detail["title"] = title
+        detail["id"] = gen_id(title)
 
-        detail["id"] = gen_id(detail["title"])
-        key = (detail["title"], detail["salary"])
+        key = (title, detail["salary"])
         if key in seen_keys:
-            print(f"    ⏭ {detail['title']} 重复，跳过"); continue
+            print(f"    ⏭ {title} 重复，跳过"); continue
 
         seen_keys.add(key)
         extracted.append(detail)
-        print(f"    ✓ {detail['title']} | {detail['salary'] or '?'} | {detail['degree'] or '?'}")
+        print(f"    ✓ {title} | {detail['salary'] or '?'} | {detail['degree'] or '?'}")
         reqs = (detail.get('requirements') or '')[:80]
         if reqs: print(f"      要求: {reqs}")
 
@@ -481,10 +585,13 @@ def main():
 
     print(f"\n  {len(extracted)} 个岗位:")
     for j in extracted:
-        category = j.get("category", "")
-        cat_str = f" [{category}]" if category else " [⚠ 无category,请更新jobs-template.json]"
+        salary = j.get("salary") or "?"
+        degree = j.get("degree") or "?"
+        exp = j.get("experience") or ""
+        exp_str = f" | {exp}" if exp else ""
         reqs = (j.get("requirements", "") or "")[:80]
-        print(f"  ✅ {j['title']:35s}{cat_str} | {reqs}")
+        print(f"  ✅ {j['title']:35s} | {salary} | {degree}{exp_str}")
+        if reqs: print(f"      {reqs}")
 
     if args.dry_run:
         print(f"\n⚠ 预览 — 未写入")

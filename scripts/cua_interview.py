@@ -834,6 +834,18 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
+    # 预约成功 → 写回数据库（dry-run / --no-db 不写）
+    if result["status"] == "scheduled" and not args.no_db:
+        from app.db import record_interview
+        conn = init_db()
+        booked_uid = result.get("uid") or uid
+        ok = record_interview(conn, booked_uid, args.type, args.date, args.time)
+        conn.close()
+        if ok:
+            print(f"  📝 已记录面试到数据库 (uid={booked_uid}, status=interviewed)")
+        else:
+            print(f"  ⚠ 未能写入数据库：uid={booked_uid} 未匹配到候选人（可手动核对）")
+
     # Result
     emoji = {"scheduled": "✅", "skipped": "⏭️", "error": "❌", "dry_run": "🔍"}
     print(f"\n{'=' * 60}")

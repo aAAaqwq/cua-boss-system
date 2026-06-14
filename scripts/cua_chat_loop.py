@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, check_candidate
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school, check_candidate, check_degree
 from app.chat_reply import load_jobs_config, generate_reply, detect_job, check_deepseek_configured
 from app.db import DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
@@ -890,7 +890,7 @@ def review_one_candidate(
                 category_templates = job.get("category_templates", [])
                 job_context = f"{job['title']} | {job['requirements']} | {job['salary']}"
                 matched_job = job
-                print(f"    岗位: {job['title']} ({job.get('category', '')})")
+                print(f"    岗位: {job['title']}")
                 break
 
     chat_history = convo.get("chat_history", [])

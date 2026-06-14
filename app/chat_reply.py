@@ -9,7 +9,7 @@
   config/reply-templates.json — 话术模板参考（提交到 git）
   config/reply.json          — 本地话术配置（gitignore，运行时读取）
   config/jobs.json           — 岗位定义（同步自 BOSS）
-  config/jobs-template.json  — 岗位元数据模板（手动维护 id/category）
+  config/jobs-template.json  — 岗位元数据模板（手动维护 id）
 """
 import json
 import os
@@ -46,10 +46,10 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
       {
         "jobs": [
           {
-            "id": "dev", "title": "开发", "category": "tech",
+            "id": "dev", "title": "开发",
             "requirements": "...", "location": "广州", "salary": "16K-30K", "degree": "本科",
             "templates": [...],          # 岗位专属，按 priority 排序
-            "category_templates": [...], # 类别通用 (tech/nontech)
+            "category_templates": [...], # 类别通用 (tech/nontech)，运行时按岗位名推断
           },
           ...
         ],
@@ -76,7 +76,7 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
             jobs = []
             for j in job_data.get("jobs", []):
                 jid = j.get("id", "")
-                category = j.get("category", "")
+                category = infer_category(j.get("title", ""), j.get("requirements", ""))
                 job = dict(j)
                 job["templates"] = _sort_templates(tpl_jobs.get(jid, []))
                 job["category_templates"] = _sort_templates(tpl_categories.get(category, []))
@@ -121,6 +121,27 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
 # ══════════════════════════════════════════════════
 # 岗位检测 — 从候选人消息/职位推断目标岗位
 # ══════════════════════════════════════════════════
+
+def infer_category(title: str, requirements: str = "") -> str:
+    """根据岗位标题和需求推断类别: tech / nontech
+
+    >>> infer_category("Python开发工程师")
+    'tech'
+    >>> infer_category("营销总监")
+    'nontech'
+    """
+    combined = f"{title} {requirements}".lower()
+    tech_keywords = [
+        "开发", "工程师", "java", "python", "前端", "后端", "全栈",
+        "架构", "算法", "数据", "运维", "测试", "devops", "sre",
+        "android", "ios", "flutter", "react", "vue", "node",
+        "golang", "rust", "c++", "程序员", "coding", "技术",
+    ]
+    for kw in tech_keywords:
+        if kw in combined:
+            return "tech"
+    return "nontech"
+
 
 def detect_job(
     candidate_message: str,

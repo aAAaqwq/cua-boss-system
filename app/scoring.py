@@ -15,6 +15,7 @@ from typing import Optional
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 DEFAULT_SCORING_CONFIG = CONFIG_DIR / "scoring.json"
+SCORING_TEMPLATE = CONFIG_DIR / "scoring-template.json"
 
 
 # ══════════════════════════════════════════════════
@@ -48,6 +49,7 @@ class CandidateScore:
     total_score: float = 0.0
     summary: str = ""
     errors: list[str] = field(default_factory=list)
+    skipped: bool = False  # True = 未满足评分前置条件（如无简历附件），未调用 DeepSeek
 
     @property
     def max_score(self) -> int:
@@ -59,10 +61,22 @@ class CandidateScore:
 # ══════════════════════════════════════════════════
 
 def load_scoring_config(config_path: Optional[str] = None) -> dict:
-    """加载评分配置文件"""
-    path = Path(config_path) if config_path else DEFAULT_SCORING_CONFIG
+    """加载评分配置文件
+
+    与项目其他配置一致的 template+local 双文件模式：
+    优先读 `scoring.json`（本地自定义，gitignore），不存在则用
+    `scoring-template.json`（提交到 git 的参考模板）兜底。
+    """
+    if config_path:
+        path = Path(config_path)
+    elif DEFAULT_SCORING_CONFIG.exists():
+        path = DEFAULT_SCORING_CONFIG
+    else:
+        path = SCORING_TEMPLATE
     if not path.exists():
-        raise FileNotFoundError(f"评分配置文件不存在: {path}")
+        raise FileNotFoundError(
+            f"评分配置文件不存在: {DEFAULT_SCORING_CONFIG} / {SCORING_TEMPLATE}"
+        )
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -121,6 +135,109 @@ def _parse_dimensions(raw: list[dict]) -> list[ScoreDimension]:
 
 
 # ══════════════════════════════════════════════════
+# 评级 + 输入上限（统一从 scoring.json 读，改配置即生效）
+# ══════════════════════════════════════════════════
+
+_DEFAULT_GRADES = [
+    {"min": 85, "label": "S", "desc": "强烈推荐"},
+    {"min": 70, "label": "A", "desc": "推荐"},
+    {"min": 55, "label": "B", "desc": "可考虑"},
+    {"min": 40, "label": "C", "desc": "待定"},
+    {"min": 0,  "label": "D", "desc": "不推荐"},
+]
+_DEFAULT_LIMITS = {"resume_max_chars": 4000, "chat_max_turns": 30, "rescore_window_days": 2}
+
+
+def grade(total: float, config: Optional[dict] = None) -> str:
+    """总分 → 评级标签（如 "S 强烈推荐"）。阈值统一读 scoring.json 的 grades。
+
+    全项目唯一的评级口径入口；report/排行榜都走这里，改 scoring.json 即生效。
+    """
+    grades = (config or {}).get("grades") or _DEFAULT_GRADES
+    for g in sorted(grades, key=lambda x: x.get("min", 0), reverse=True):
+        if total >= g.get("min", 0):
+            return f"{g.get('label', '')} {g.get('desc', '')}".strip()
+    return ""
+
+
+def input_limits(config: Optional[dict] = None) -> dict:
+    """传给 DeepSeek 的输入上限 + 重新评分窗口（带默认兜底）。"""
+    limits = dict(_DEFAULT_LIMITS)
+    limits.update((config or {}).get("input_limits") or {})
+    return limits
+
+
+# ══════════════════════════════════════════════════
+# 统一的候选人详细数据：DB 行 → 标准字典 → 统一文本块
+# （match_best_job 判断岗位 与 评分 共用同一份输入，喂给 DeepSeek 的数据一致）
+# ══════════════════════════════════════════════════
+
+_CANDIDATE_FIELDS = (
+    "uid", "name", "job_position", "school", "degree",
+    "resume_content", "resume_filename", "has_resume",
+    "wechat", "has_wechat", "phone", "email", "notes",
+    "chat_history", "status",
+)
+
+
+def build_candidate_data(row) -> dict:
+    """candidates 表的一行（sqlite3.Row / dict）→ 标准候选人数据字典。
+
+    统一字段集合，供 match_best_job / evaluate_candidate(_auto) 共用。
+    """
+    def _get(key):
+        try:
+            return row[key]
+        except (KeyError, IndexError, TypeError):
+            return row.get(key) if isinstance(row, dict) else None
+    return {k: _get(k) for k in _CANDIDATE_FIELDS}
+
+
+def has_resume_content(candidate_data: dict) -> bool:
+    """候选人是否有简历附件内容（评分前置条件）。
+
+    简历附件是评分的主要依据，无内容则不评分。仅看 resume_content 实际文本，
+    不依赖 has_resume 标志位（标志位可能为真但抓取内容为空）。
+    """
+    return bool((candidate_data.get("resume_content") or "").strip())
+
+
+def _normalize_chat(chat_history) -> list[dict]:
+    if isinstance(chat_history, str):
+        try:
+            chat_history = json.loads(chat_history)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return [t for t in (chat_history or []) if isinstance(t, dict)]
+
+
+def format_candidate_block(candidate_data: dict, config: Optional[dict] = None) -> str:
+    """候选人详细数据 → 统一文本块（评分 / 岗位判断 prompt 共用）。
+
+    简历截断长度、聊天条数由 scoring.json 的 input_limits 控制。
+    """
+    lim = input_limits(config)
+    resume = (candidate_data.get("resume_content") or "")[: lim["resume_max_chars"]]
+    chat = _normalize_chat(candidate_data.get("chat_history"))[-lim["chat_max_turns"]:]
+    chat_lines = [f"[{t.get('role', '?')}] {t.get('content', '')}" for t in chat]
+    chat_text = "\n".join(chat_lines) if chat_lines else "（无聊天记录）"
+
+    wechat = candidate_data.get("wechat") or (
+        "已交换" if candidate_data.get("has_wechat") else "无")
+    notes = candidate_data.get("notes") or "无"
+
+    return f"""- 姓名: {candidate_data.get('name', '未知')}
+- 当前/应聘职位: {candidate_data.get('job_position', '') or '未知'}
+- 学校 / 学历: {candidate_data.get('school', '') or '未知'} / {candidate_data.get('degree', '') or '未知'}
+- 微信: {wechat}
+- 备注: {notes}
+- 简历:
+{resume or '（未提供简历）'}
+- 聊天记录（最近 {lim['chat_max_turns']} 条）:
+{chat_text}"""
+
+
+# ══════════════════════════════════════════════════
 # DeepSeek API
 # ══════════════════════════════════════════════════
 
@@ -157,42 +274,15 @@ def _build_scoring_prompt(
     dimensions: list[ScoreDimension],
     candidate_data: dict,
     job_context: str = "",
+    config: Optional[dict] = None,
 ) -> str:
-    """构建包含全部维度的评分 prompt"""
+    """构建包含全部维度的评分 prompt（候选人详细数据走统一格式块）"""
 
-    name = candidate_data.get("name", "未知")
-    job_position = candidate_data.get("job_position", "未知")
-    school = candidate_data.get("school", "未知")
-    degree = candidate_data.get("degree", "未知")
+    candidate_block = format_candidate_block(candidate_data, config)
 
-    # 聊天记录（最近 10 条）
-    chat_history = candidate_data.get("chat_history") or []
-    if isinstance(chat_history, str):
-        try:
-            chat_history = json.loads(chat_history)
-        except (json.JSONDecodeError, TypeError):
-            chat_history = []
-    chat_lines = []
-    for turn in (chat_history or [])[-10:]:
-        if isinstance(turn, dict):
-            role = turn.get("role", "?")
-            content = turn.get("content", "")
-            chat_lines.append(f"[{role}] {content}")
-    chat_text = "\n".join(chat_lines) if chat_lines else "（无聊天记录）"
-
-    # 简历
-    resume = candidate_data.get("resume_content", "")
-    resume_text = (resume or "（未提供简历）")[:800]
-
-    # 备注
-    notes = candidate_data.get("notes", "")
-    if notes:
-        resume_text += f"\n备注: {notes}"
-
-    # 维度列表
-    dim_lines = []
-    for d in dimensions:
-        dim_lines.append(f"- **{d.name}**（权重 {d.weight}/100）: {d.description}")
+    dim_lines = [
+        f"- **{d.name}**（权重 {d.weight}/100）: {d.description}" for d in dimensions
+    ]
     dim_text = "\n".join(dim_lines)
 
     # 维度 key 模板（用于返回 JSON）
@@ -206,14 +296,7 @@ def _build_scoring_prompt(
 {job_context or '（未提供）'}
 
 ## 候选人信息
-- 姓名: {name}
-- 当前职位: {job_position}
-- 学校: {school}
-- 学历: {degree}
-- 简历: {resume_text}
-
-## 聊天记录（最近对话）
-{chat_text}
+{candidate_block}
 
 ## 评分维度（每个 0-10 分）
 {dim_text}
@@ -231,6 +314,7 @@ def _call_deepseek_scoring(
     dimensions: list[ScoreDimension],
     candidate_data: dict,
     job_context: str = "",
+    config: Optional[dict] = None,
 ) -> tuple[dict[str, tuple[float, str]], str, list[str]]:
     """调用 DeepSeek 批量评估全部维度
 
@@ -244,7 +328,7 @@ def _call_deepseek_scoring(
         errors.append(msg)
         return {}, "", errors
 
-    prompt = _build_scoring_prompt(dimensions, candidate_data, job_context)
+    prompt = _build_scoring_prompt(dimensions, candidate_data, job_context, config)
     dim_keys = {d.key for d in dimensions}
 
     payload = json.dumps({
@@ -344,7 +428,7 @@ def evaluate_candidate(
 
     # 2. 全部维度走 AI 评分
     ai_scores, summary, errors = _call_deepseek_scoring(
-        dimensions, candidate_data, job_context,
+        dimensions, candidate_data, job_context, config,
     )
 
     # 3. 组装结果
@@ -367,6 +451,162 @@ def evaluate_candidate(
         total_score=round(total, 1),
         summary=summary,
         errors=errors,
+    )
+
+
+def match_best_job(
+    candidate_data: dict,
+    jobs: list[dict],
+    config: Optional[dict] = None,
+) -> str:
+    """让 DeepSeek 从开放岗位列表中判断候选人最匹配的岗位 id。
+
+    把开放岗位（id/标题/要求摘要）+ 候选人信息交给模型自行判断，
+    比纯关键词匹配更准。返回 job_id；无 API key / 调用失败 /
+    模型返回非法 id 时返回 ""（调用方据此回退）。
+    """
+    if not jobs:
+        return ""
+    cfg = _get_deepseek_config()
+    if not cfg["api_key"]:
+        return ""
+
+    valid_ids = []
+    job_lines = []
+    for j in jobs:
+        jid = j.get("id", "")
+        if not jid:
+            continue
+        valid_ids.append(jid)
+        reqs = (j.get("requirements", "") or "").replace("\n", " ")[:200]
+        job_lines.append(f'- id="{jid}" | 标题: {j.get("title", "")} | 要求摘要: {reqs}')
+    jobs_text = "\n".join(job_lines)
+
+    # 与评分共用同一份候选人详细数据块（统一输入）
+    candidate_block = format_candidate_block(candidate_data, config)
+
+    prompt = f"""你是招聘分流专家。下面是公司开放的岗位列表，请判断候选人最适合哪个岗位。
+
+## 开放岗位
+{jobs_text}
+
+## 候选人信息
+{candidate_block}
+
+只返回 JSON（不要解释、不要 markdown 代码块）: {{"job_id": "最匹配岗位的id", "reason": "一句话理由"}}
+若实在无法判断，job_id 返回空字符串。"""
+
+    payload = json.dumps({
+        "model": cfg["model"],
+        "messages": [
+            {"role": "system", "content": "你是招聘分流专家。只返回 JSON，不要额外解释。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 200,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{cfg['base_url']}/v1/chat/completions",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {cfg['api_key']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            raw = data["choices"][0]["message"]["content"].strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        result = json.loads(raw)
+        jid = (result.get("job_id") or "").strip()
+        return jid if jid in valid_ids else ""
+    except Exception:
+        return ""
+
+
+def match_job_by_position(
+    candidate_data: dict,
+    jobs: list[dict],
+    config: Optional[dict] = None,
+) -> str:
+    """根据候选人「沟通的职位」(job_position) 匹配 jobs.json 岗位 id。
+
+    每段沟通都绑定一个 BOSS 招聘岗位（job_position），评分应针对候选人实际
+    沟通的那个岗位，而非让模型从全部岗位里重新猜「最合适」的。
+
+    流程：先用关键词匹配 detect_job(job_position + 最近候选人消息)，命中即返回；
+    未命中（如 job_position 缺失/无关键词）才回退 DeepSeek match_best_job。
+    返回 job_id，全部失败时返回 ""。
+    """
+    if not jobs:
+        return ""
+
+    from app.chat_reply import detect_job  # 延迟导入，避免循环依赖
+
+    job_pos = (candidate_data.get("job_position") or "").strip()
+    # 取最近一条候选人消息辅助关键词匹配
+    chat = _normalize_chat(candidate_data.get("chat_history"))
+    last_cand_msg = next(
+        (t.get("content", "") for t in reversed(chat)
+         if t.get("role") == "candidate"),
+        "",
+    )
+
+    jid = detect_job(last_cand_msg, job_pos, jobs) or ""
+    if jid:
+        return jid
+
+    # 沟通职位无法用关键词匹配 → 回退到 DeepSeek 自行判断最匹配岗位
+    return match_best_job(candidate_data, jobs, config)
+
+
+def evaluate_candidate_auto(
+    candidate_data: dict,
+    jobs: list[dict],
+    config: Optional[dict] = None,
+) -> CandidateScore:
+    """端到端评分：按候选人「沟通的职位」匹配 jobs.json 岗位，再按该岗位维度评分。
+
+    前置条件：必须有简历附件内容（has_resume_content），否则跳过评分（skipped=True，
+    不调用 DeepSeek）—— 简历是主要评分依据。
+    岗位匹配：match_job_by_position（沟通职位关键词优先，失败回退 DeepSeek 判断）；
+    匹配成功 → 用该岗位 requirements 作上下文、按其类别取维度；
+    匹配失败 → 回退按候选人 job_position 文本推断类别评分。
+    """
+    if config is None:
+        config = load_scoring_config()
+
+    name = candidate_data.get("name", "未知")
+
+    # 前置条件：无简历附件内容 → 跳过评分（不调用 DeepSeek）
+    if not has_resume_content(candidate_data):
+        return CandidateScore(
+            candidate_name=name, job_id="", skipped=True,
+            errors=["未提供简历附件内容，跳过评分"],
+        )
+
+    jid = match_job_by_position(candidate_data, jobs, config)
+    job = next((j for j in jobs if j.get("id") == jid), None)
+
+    from app.chat_reply import infer_category  # 延迟导入，避免循环依赖
+
+    if job:
+        category = infer_category(job.get("title", ""), job.get("requirements", ""))
+        job_ctx = f"{job.get('title', '')} — {job.get('requirements', '')}"
+    else:
+        job_pos = candidate_data.get("job_position", "")
+        category = infer_category(job_pos)
+        job_ctx = job_pos
+
+    return evaluate_candidate(
+        candidate_data, job_id=jid, category=category,
+        job_context=job_ctx, config=config,
     )
 
 
@@ -393,27 +633,19 @@ def evaluate_candidates(
 # 格式化输出
 # ══════════════════════════════════════════════════
 
-def format_score_report(score: CandidateScore, verbose: bool = False) -> str:
+def format_score_report(
+    score: CandidateScore, verbose: bool = False, config: Optional[dict] = None,
+) -> str:
     """生成可读的评分报告"""
     lines = []
     total = score.total_score
     job = score.job_id or "（未指定）"
-
-    if total >= 85:
-        grade = "S — 强烈推荐"
-    elif total >= 70:
-        grade = "A — 推荐"
-    elif total >= 55:
-        grade = "B — 可考虑"
-    elif total >= 40:
-        grade = "C — 待定"
-    else:
-        grade = "D — 不推荐"
+    grade_label = grade(total, config)
 
     lines.append(f"{'='*60}")
     lines.append(f"  候选人: {score.candidate_name}")
     lines.append(f"  岗位:   {job}")
-    lines.append(f"  总分:   {total:.1f} / {score.max_score}  ({grade})")
+    lines.append(f"  总分:   {total:.1f} / {score.max_score}  ({grade_label})")
     lines.append(f"{'='*60}")
 
     for d in score.dimensions:
@@ -447,6 +679,7 @@ def format_batch_report(
     scores: list[CandidateScore],
     top_n: int = 10,
     verbose: bool = False,
+    config: Optional[dict] = None,
 ) -> str:
     """批量评分汇总报告"""
     if not scores:
@@ -461,21 +694,13 @@ def format_batch_report(
     ]
 
     for i, s in enumerate(scores[:top_n]):
-        total = s.total_score
-        if total >= 85:
-            grade = "S 强烈推荐"
-        elif total >= 70:
-            grade = "A 推荐"
-        elif total >= 55:
-            grade = "B 可考虑"
-        elif total >= 40:
-            grade = "C 待定"
-        else:
-            grade = "D 不推荐"
-        lines.append(f"  {i+1:<4d} {s.candidate_name[:12]:<12s} {total:>6.1f}  {grade:<10s}")
+        lines.append(
+            f"  {i+1:<4d} {s.candidate_name[:12]:<12s} "
+            f"{s.total_score:>6.1f}  {grade(s.total_score, config):<10s}"
+        )
 
     if verbose:
         for s in scores[:top_n]:
-            lines.append(format_score_report(s, verbose=True))
+            lines.append(format_score_report(s, verbose=True, config=config))
 
     return "\n".join(lines)

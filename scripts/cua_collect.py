@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-沟通页批量收集候选人 — 简历 & 微信 → SQLite
+沟通页批量收集候选人 — 简历 & 微信 → SQLite + 附件下载到本地
 
 流程:
   ① 进入聊天页 → 滚动加载
   ② AX树扫描所有联系人
   ③ 逐个审查:
       学校不在白名单/学历不达标 → 点"不合适"
-      符合条件 → 点"附件简历"(BOSS自动处理3种情况) → 提取 → 换微信
+      符合条件 → 点"附件简历"(BOSS自动处理3种情况) → 提取 → 下载到本地 → 换微信
   ④ 直接点侧边栏下一个，不刷新页面
 
 用法:
@@ -15,7 +15,7 @@
   python scripts/cua_collect.py --limit 10           # 前10个
   python scripts/cua_collect.py --min-degree 硕士    # 学历筛选
 """
-import json, sqlite3, subprocess, sys, time, re, random
+import json, sqlite3, subprocess, sys, time, re, random, os, urllib.request, shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -28,6 +28,8 @@ from scripts.boss_click_buheshi import click_buheshi
 SESSION = "boss-collect"
 CHROME = "com.google.Chrome"
 CHAT = "https://www.zhipin.com/web/chat/index"
+RESUMES_DIR = Path(__file__).parent.parent / "data" / "resumes"  # 附件简历本地存储
+RESUMES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # cua-driver 文本响应中的错误特征
@@ -311,21 +313,186 @@ def ax_click(text, pid, wid):
     return False
 
 
-def _right_panel_text(tree: str) -> str:
-    """从 AX 树提取右侧对话面板区域（排除左侧联系人和聊天历史干扰）"""
-    lines = tree.split("\n")
-    panel_start = 0
-    # 找到"没有更多了"之后第一个带名字+岁 的区块作为面板起点
-    for i, line in enumerate(lines):
-        m = re.search(r'\[(\d+)\]', line)
-        idx = int(m.group(1)) if m else 0
-        # 右侧面板在"没有更多了"之后: index ≈ 262+
-        if idx >= 262 and 'AXStaticText' in line:
-            panel_start = i
-            break
-    if not panel_start:
-        return tree  # fallback
-    return "\n".join(lines[panel_start:])
+def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
+    """从 BOSS PDF 预览中提取下载 URL 并触发浏览器下载
+
+    Chrome 内嵌 PDF viewer 的工具栏（下载按钮）对 macOS Accessibility API
+    完全不可见，无法通过 AX 树定位。实际方案：从 PDF viewer iframe 的
+    src 参数中解码真实下载地址，用 JS 触发 Chrome 下载。
+
+    返回本地文件路径，失败返回 None。
+    """
+    RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 从 PDF viewer iframe src 提取真实下载 URL
+    # BOSS 格式: https://www.zhipin.com/bzl-office/pdf-viewer-b
+    #   ?url=%2Fwflow%2Fzpgeek%2Fdownload%2Fpreview4boss%2F{id}%3Fd%3D{ts}...
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": wid,
+        "action": "execute_javascript",
+        "javascript": """
+        JSON.stringify((function(){
+            var iframes = document.querySelectorAll('iframe');
+            for (var i = 0; i < iframes.length; i++) {
+                var src = iframes[i].src || '';
+                var m = src.match(/bzl-office\\/pdf-viewer-b\\?url=([^&]+)/);
+                if (m) {
+                    var decoded = decodeURIComponent(m[1]);
+                    return {url: 'https://www.zhipin.com' + decoded, source: 'iframe'};
+                }
+                // 也检查直接嵌入的 PDF
+                m = src.match(/\\.pdf(\\?|$)/);
+                if (m) return {url: src, source: 'iframe-direct'};
+            }
+            // 回退: embed/object 元素
+            var embeds = document.querySelectorAll('embed[src*=".pdf"], object[data*=".pdf"]');
+            for (var j = 0; j < embeds.length; j++) {
+                var u = embeds[j].src || embeds[j].getAttribute('data') || '';
+                if (u) return {url: u, source: 'embed'};
+            }
+            return {url: null};
+        })())
+        """,
+    }))
+
+    pdf_url = ""
+    if isinstance(r, dict):
+        pdf_url = r.get("url", "") or ""
+
+    if not pdf_url:
+        return None
+
+    # 构造安全文件名
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    ext = ".pdf"
+    if filename:
+        m = re.search(r'\.(\w+)$', filename)
+        if m:
+            ext = f".{m.group(1)}"
+    dest = RESUMES_DIR / f"{safe_name}{ext}"
+
+    # 去重: 已有同名文件则加时间戳
+    if dest.exists():
+        ts = datetime.now().strftime("%H%M%S")
+        dest = RESUMES_DIR / f"{safe_name}_{ts}{ext}"
+
+    # 策略1: JS 触发 Chrome 下载 (a.click) -> 从 ~/Downloads 拷贝
+    dl_dir = Path.home() / "Downloads"
+    before = set(str(p) for p in dl_dir.iterdir()) if dl_dir.exists() else set()
+
+    safe_pdf_url = pdf_url.replace("'", "\\'")
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": wid,
+        "action": "execute_javascript",
+        "javascript": f"""
+        (function(){{
+            var a = document.createElement('a');
+            a.href = '{safe_pdf_url}';
+            a.download = '';
+            a.click();
+            return 'clicked';
+        }})()
+        """,
+    }))
+
+    # 等待下载完成
+    for _ in range(15):
+        time.sleep(1)
+        after = set(str(p) for p in dl_dir.iterdir())
+        new = after - before
+        if new:
+            src = Path(list(new)[0])
+            # 等待文件写入稳定
+            for __ in range(10):
+                s1 = src.stat().st_size if src.exists() else 0
+                time.sleep(0.5)
+                s2 = src.stat().st_size if src.exists() else 0
+                if s1 == s2 and s1 > 0:
+                    break
+            shutil.copy2(str(src), str(dest))
+            print(f"    📥 附件下载: {dest} ({s2:,} bytes)")
+            return str(dest)
+
+    # 策略2: 用 urllib 直连下载（可能无登录态）
+    try:
+        req = urllib.request.Request(pdf_url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Referer": "https://www.zhipin.com/",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            dest.write_bytes(resp.read())
+        print(f"    📥 直链下载: {dest}")
+        return str(dest)
+    except Exception as e:
+        print(f"    ⚠ 下载失败: {e}")
+        return None
+
+
+def _fetch_pdf(url: str, name: str, filename: str = "") -> str | None:
+    """通过 HTTP 下载 PDF 到本地"""
+    RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    ext = ".pdf"
+    if filename:
+        m = re.search(r'\.(\w+)$', filename)
+        if m: ext = f".{m.group(1)}"
+    dest = RESUMES_DIR / f"{safe_name}{ext}"
+
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Referer": "https://www.zhipin.com/",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            dest.write_bytes(resp.read())
+        print(f"    📥 下载成功: {dest}")
+        return str(dest)
+    except Exception as e:
+        print(f"    ⚠ 下载失败: {e}")
+        return None
+
+
+def _wait_download(name: str, filename: str = "") -> str | None:
+    """等待浏览器下载完成，在 ~/Downloads 中找最新文件拷贝到 data/resumes/"""
+    dl_dir = Path.home() / "Downloads"
+    if not dl_dir.exists():
+        return None
+
+    # 轮询等待新文件出现（最多 10s）
+    before = set(str(p) for p in dl_dir.iterdir())
+    for _ in range(10):
+        time.sleep(1)
+        after = set(str(p) for p in dl_dir.iterdir())
+        new = after - before
+        if new:
+            src = Path(list(new)[0])
+            # 等待文件写入完成
+            for __ in range(5):
+                size1 = src.stat().st_size if src.exists() else 0
+                time.sleep(0.5)
+                size2 = src.stat().st_size if src.exists() else 0
+                if size1 == size2 and size1 > 0:
+                    break
+
+            RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+            safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+            ext = src.suffix or ".pdf"
+            if filename:
+                m = re.search(r'\.(\w+)$', filename)
+                if m: ext = f".{m.group(1)}"
+            dest = RESUMES_DIR / f"{safe_name}{ext}"
+
+            # 去重: 已有同名文件则加时间戳
+            if dest.exists():
+                ts = datetime.now().strftime("%H%M%S")
+                dest = RESUMES_DIR / f"{safe_name}_{ts}{ext}"
+
+            shutil.copy2(str(src), str(dest))
+            print(f"    📥 下载成功: {dest}")
+            return str(dest)
+    return None
 
 
 # ══════════════════════════════════════════════════
@@ -335,7 +502,7 @@ def _right_panel_text(tree: str) -> str:
 def read_panel(pid, wid):
     """读右侧对话面板: name, school, degree, job"""
     tree = ax_tree(pid, wid)
-    result = {"name": "", "school": "", "degree": "", "job": "",
+    result: dict = {"name": "", "school": "", "degree": "", "job": "",
               "has_attachment": False, "resume_filename": ""}
 
     for line in tree.split("\n"):
@@ -657,8 +824,8 @@ def upsert(conn, data):
         conn.execute("""
             INSERT INTO candidates
                 (uid, name, job_position, school, degree, resume_content, resume_filename,
-                 has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resume_path, has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(uid) DO UPDATE SET
                 name = excluded.name,
                 job_position = excluded.job_position,
@@ -666,6 +833,7 @@ def upsert(conn, data):
                 degree = excluded.degree,
                 resume_content = CASE WHEN excluded.resume_content != '' THEN excluded.resume_content ELSE candidates.resume_content END,
                 resume_filename = CASE WHEN excluded.resume_filename != '' THEN excluded.resume_filename ELSE candidates.resume_filename END,
+                resume_path = CASE WHEN excluded.resume_path != '' THEN excluded.resume_path ELSE candidates.resume_path END,
                 has_resume = CASE WHEN excluded.has_resume = 1 THEN 1 ELSE candidates.has_resume END,
                 wechat = CASE WHEN excluded.wechat != '' THEN excluded.wechat ELSE candidates.wechat END,
                 has_wechat = CASE WHEN excluded.has_wechat = 1 THEN 1 ELSE candidates.has_wechat END,
@@ -678,6 +846,7 @@ def upsert(conn, data):
             uid, data.get("name",""), data.get("job",""),
             data.get("school",""), data.get("degree",""),
             data.get("resume_content",""), data.get("resume_filename",""),
+            data.get("resume_path",""),
             1 if data.get("has_resume") else 0,
             data.get("wechat",""), 1 if data.get("has_wechat") else 0,
             data.get("phone",""), data.get("email",""),
@@ -689,12 +858,13 @@ def upsert(conn, data):
         conn.execute("""
             INSERT INTO candidates
                 (name, job_position, school, degree, resume_content, resume_filename,
-                 has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resume_path, has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get("name",""), data.get("job",""),
             data.get("school",""), data.get("degree",""),
             data.get("resume_content",""), data.get("resume_filename",""),
+            data.get("resume_path",""),
             1 if data.get("has_resume") else 0,
             data.get("wechat",""), 1 if data.get("has_wechat") else 0,
             data.get("phone",""), data.get("email",""),
@@ -838,6 +1008,16 @@ def main():
                 result = click_attachment_resume(pid, wid, name)
                 resume_content = result.get("resume_content", "")
 
+            # 附件下载: 从 PDF viewer iframe 提取 URL 并下载到本地
+            resume_path = ""
+            if not args.dry_run and resume_content:
+                resume_path = _download_attachment(
+                    pid, wid, name,
+                    filename=panel.get("resume_filename", ""),
+                ) or ""
+                if resume_path:
+                    print(f"    ✓ 附件已保存: {resume_path}")
+
             # 微信: 已交换→提取微信号, 可换→点换微信→确认, DB已有→跳过
             wechat_id = ""
             wechat_requested = False
@@ -894,6 +1074,7 @@ def main():
                 "name": name, "job": job, "school": school, "degree": degree,
                 "resume_content": resume_content,
                 "resume_filename": panel.get("resume_filename", ""),
+                "resume_path": resume_path,
                 "has_resume": bool(resume_content),
                 "wechat": wechat_id, "has_wechat": wechat_requested or bool(wechat_id),
                 "phone": phone, "email": email, "status": "collected",

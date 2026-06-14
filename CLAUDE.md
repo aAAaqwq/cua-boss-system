@@ -10,19 +10,23 @@ cua-boss-system/
 │   ├── db.py                 # 共享数据库模块(init_db / DB_PATH / schema迁移)
 │   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
 │   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测
-│   └── scoring.py            # 候选人评分系统(rule+AI/可配置维度/按岗位自定义权重)
-├── config/
-│   ├── jobs.json             # 岗位配置(cua_sync_jobs.py 自动同步)
-│   ├── templates.json        # 话术模板(专属→类别→兜底 三层)
-│   ├── scoring.json          # 评分维度配置(按类别默认/岗位覆盖/权重100)
+│   └── scoring.py            # 候选人评分系统(AI多维度/岗位自动判断/按岗位自定义权重)
+├── config/                   # template+local 双文件: -template.json提交git, 同名.json本地gitignore
+│   ├── jobs.json / jobs-template.json       # 岗位配置(cua_sync_jobs.py同步) + id/category模板
+│   ├── reply.json / reply-templates.json    # 话术模板(专属→类别→兜底 三层)
+│   ├── filter.json / filter-template.json   # 筛选条件(名校白名单+学历)
+│   ├── scoring.json / scoring-template.json # 评分维度(类别默认/岗位覆盖/权重100)
 │   └── system_prompt.md      # DeepSeek 系统提示词(HR招聘专家人设，.md维护)
 ├── scripts/
+│   ├── boss_pipeline.py        # 全流程编排(打招呼→收集→沟通，参数化，取代boss-full-pipeline skill)
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent原生鼠标)
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通(阶段感知+uid提取+上下文合并)
 │   ├── cua_collect.py          # 沟通页批量收集(简历+微信→SQLite)
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
 │   ├── cua_sync_jobs.py        # 职位管理页同步岗位信息
-│   └── query_db.py             # 数据库查询/统计/CSV导出
+│   ├── cua_interview.py        # 预约面试(选线上/线下+日期+时间，成功后写回DB)
+│   ├── interview_reminder.py   # 面试提醒(读DB已约面试，可发macOS通知，纯读不操作Chrome)
+│   └── query_db.py             # 数据库查询/统计/CSV导出 + --rank评分排行榜
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
@@ -140,7 +144,50 @@ python scripts/cua_sync_jobs.py --limit 3   # 调试
 - requirements: JS直读iframe内textarea(绕过AX树200字截断)
 - salary/degree/location: AXStaticText/AXTextField
 
-## 话术模板 (templates.json)
+### boss_pipeline.py — 全流程编排(打招呼→收集→沟通)
+
+```bash
+python scripts/boss_pipeline.py                          # 打招呼20/收集5/沟通5(默认)
+python scripts/boss_pipeline.py --greet 100 --collect 30 --chat 30
+python scripts/boss_pipeline.py --min-degree 硕士 --schools "清华,北大"
+python scripts/boss_pipeline.py --dry-run                 # 全程预览
+python scripts/boss_pipeline.py --skip-greet              # 跳过已完成步骤续跑
+```
+
+顺序执行 greeting→collect→chat，前一步退出码 0 才进下一步；任一步失败立即中断。`--greet/--collect/--chat` 控制各步 `--limit`，其余参数透传。取代旧的 boss-full-pipeline skill。
+
+### cua_interview.py — 预约面试
+
+```bash
+python scripts/cua_interview.py --uid 12345678 --type 线上 --date 2026-06-20 --time 14:30
+python scripts/cua_interview.py --uid 12345678 --type 线下 --date 2026-06-20 --time 10:00 --dry-run
+```
+
+进沟通页定位联系人 → 打开面试邀请表单 → 选类型/日期/时间 → 发送。**成功后 `record_interview()` 写回 DB**(interview_* 字段 + status=interviewed)，dry-run/--no-db 不写。`--type` 仅 线上/线下。
+
+### interview_reminder.py — 面试提醒
+
+```bash
+python scripts/interview_reminder.py              # 今天+明天(默认窗口1天)
+python scripts/interview_reminder.py --within 3    # 未来3天
+python scripts/interview_reminder.py --notify      # 额外发 macOS 系统通知
+```
+
+纯读 candidates.db 中已约面试(interview_date 非空)，按日期排序展示。**不操作 Chrome**，可安全做定时任务(如每天6点)。
+
+### query_db.py --rank — 评分排行榜
+
+```bash
+python scripts/query_db.py --rank                    # 最近2天/前10/排除已面试(默认)
+python scripts/query_db.py --rank --days 7 --top 20
+python scripts/query_db.py --rank --no-score         # 只按已缓存分排,不调DeepSeek
+python scripts/query_db.py --rank --rescore          # 强制重算
+python scripts/query_db.py --rank --job-id ai-fullstack  # 强制指定岗位
+```
+
+**评分对象**: (未评分 ∪ 数据近 N 天更新过且比上次评分新) **且有简历附件内容**(N=scoring.json input_limits.rescore_window_days,默认2;数据更新由 updated_at 触发器跟踪)。**按候选人沟通的职位 job_position 匹配岗位再评分并缓存**(score/scored_at) → 按总分降序展示「最近 --days 天活跃」未面试前 --top 名。--rescore 强制重算,--no-score 只读缓存,无 uid / 无简历者跳过。见下方评分系统。
+
+## 话术模板 (config/reply.json / reply-templates.json)
 
 模板按 `job_id` 组织，每个岗位有专属话术 + 全局 `fallback` 兜底。
 
@@ -188,7 +235,10 @@ candidates 表核心字段:
 - `uid` — BOSS 用户唯一标识（DOM data-id），跨脚本匹配键
 - `has_resume` / `has_wechat` — collect 写入，chat_loop 读取做阶段感知
 - `chat_history` — 聊天记录 JSON，chat_loop 写入
-- `status` — collected / replied / unsuitable
+- `updated_at` — 相关数据列(简历/微信/聊天等)变更时由触发器 `trg_candidates_touch` 自动刷新；评分/面试列不触发。用于 `--rank` 判断「数据是否比上次评分新」
+- `score` / `score_summary` / `scored_at` — `query_db.py --rank` 懒评分缓存(scored_at 用 CURRENT_TIMESTAMP，与 updated_at 同 UTC 基准)
+- `interview_type` / `interview_date` / `interview_time` / `interview_at` — `cua_interview.py` 预约成功后写入
+- `status` — collected / replied / unsuitable / interviewed
 
 ## 筛选条件 (filter_criteria.py)
 
@@ -200,35 +250,55 @@ candidates 表核心字段:
 
 多维度 AI 评分，满分 100。每个岗位可独立配置评分维度和权重。全部维度统一走 DeepSeek 一次 API 调用完成。
 
-### 配置 (config/scoring.json)
+### 配置 (config/scoring.json / scoring-template.json)
 
-两层配置，岗位覆盖优先：
+运行时优先读 `scoring.json`(本地,gitignore)，不存在则用 `scoring-template.json` 兜底。**一个文件管全部评分细则，改这里即生效**：
 ```
-category_defaults  →  按类别设默认维度+权重（tech / nontech）
-job_overrides      →  具体岗位覆盖默认值（如 annotation-2）
+category_defaults / job_overrides  →  维度+权重（岗位覆盖 > 类别默认，权重和=100）
+grades                             →  评级分数线 S/A/B/C/D（{min,label,desc}）
+input_limits                       →  传给 DeepSeek 的输入上限 + 重评窗口
+                                       (resume_max_chars / chat_max_turns / rescore_window_days)
 ```
 
-每个维度定义: `{key, name, weight, description}` — 纯描述，无需 `eval_type`。
+每个维度定义: `{key, name, weight, description}` — 纯描述，无需 `eval_type`。评级口径全项目走 `scoring.grade()` 单一入口。
+
+### 评分前置：必须有简历附件内容
+
+简历附件是主要评分依据。`resume_content` 为空 → 跳过评分（`skipped=True`，不调用 DeepSeek、不写分，保持未评分）。`query_db.py --rank` 在 SQL 层就过滤掉无简历者，并提示跳过人数。
+
+### 岗位匹配：按「沟通的职位」（默认）
+
+每段沟通都绑定一个 BOSS 招聘岗位（`candidates.job_position`）。评分针对候选人**实际沟通的那个岗位**，而非让模型从全部岗位里重新猜「最合适」：
+- `match_job_by_position(candidate, jobs, config)` → 先用关键词 `detect_job(job_position + 最近候选人消息)` 匹配 jobs.json；未命中才回退 `match_best_job`（DeepSeek 判断）。返回 job_id（全失败→""）
+- `evaluate_candidate_auto(candidate, jobs, config)` → 简历前置检查 + 岗位匹配 + 评分（一站式）
+
+`query_db.py --rank` 默认走 auto 路径；`--job-id` 可强制指定岗位跳过匹配。
 
 ### 使用
 
 ```python
-from app.scoring import evaluate_candidate, format_score_report, load_scoring_config
+# 推荐: DeepSeek 自行判断岗位后评分
+from app.scoring import evaluate_candidate_auto, load_scoring_config, format_score_report
+from app.chat_reply import load_jobs_config
 
-config = load_scoring_config()
-score = evaluate_candidate(
+jobs = load_jobs_config().get("jobs", [])
+score = evaluate_candidate_auto(
     candidate_data={"name": "张三", "school": "清华", "degree": "硕士", ...},
-    job_id="dev", category="tech",
-    job_context="开发 — 需要5-10年Java经验",
-    config=config,
+    jobs=jobs, config=load_scoring_config(),
 )
 print(format_score_report(score, verbose=True))
-# 输出: 总分/100 + 每维度分数 + 打分依据 + 综合评价
+
+# 或显式指定岗位(跳过模型判断)
+from app.scoring import evaluate_candidate
+score = evaluate_candidate(candidate_data={...}, job_id="ai-fullstack",
+                           category="tech", job_context="...", config=load_scoring_config())
 ```
 
 ### 打分流程
 
 ```
+0a.has_resume_content()                  → 无简历附件内容则跳过(skipped, 不评分)
+0b.(auto)match_job_by_position()         → 按沟通职位 job_position 匹配岗位(--job-id 则跳过)
 1. resolve_dimensions(job_id, category)  → 获取维度列表（覆盖 > 默认）
 2. _build_scoring_prompt()               → 将全部维度 + 候选人信息 + 聊天记录
                                              拼接为评分 prompt
