@@ -59,8 +59,7 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
       {
         "jobs": [
           {
-            "id": "开发",  # id = 岗位名（由 cua_sync_jobs.gen_id 规范化生成）
-            "title": "开发",
+            "title": "开发",  # 岗位名即唯一键（无独立 id 字段）
             "requirements": "...", "location": "广州", "salary": "16K-30K", "degree": "本科",
             "templates": [...],          # 岗位专属，按 priority 排序
             "category_templates": [...], # 类别通用 (tech/nontech)，运行时按岗位名推断
@@ -89,7 +88,7 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
 
             jobs = []
             for j in job_data.get("jobs", []):
-                jid = j.get("id", "")
+                jid = j.get("title", "")  # 岗位名即唯一键（无独立 id）
                 category = infer_category(j.get("title", ""), j.get("requirements", ""))
                 job = dict(j)
                 job["templates"] = _sort_templates(tpl_jobs.get(jid, []))
@@ -182,13 +181,13 @@ def detect_job(
 ) -> Optional[str]:
     """根据候选人消息和「沟通职位」，推断对应哪个招聘岗位
 
-    匹配信号（均来自岗位自身字段或配置，无硬编码 id→关键词 映射）:
+    匹配信号（均来自岗位自身字段或配置，无硬编码映射）:
       1. 沟通职位(job_position) 与岗位名直接对应 —— 最强信号。
-         job_position 本就是 BOSS 岗位名，而 id 也=岗位名，故通常精确命中。
+         job_position 本就是 BOSS 岗位名，而岗位名即唯一键，故通常精确命中。
       2. 配置可选 match_keywords —— 业务关键词放进 jobs 配置而非代码。
       3. 岗位名/要求与对话文本的 token 重叠（英文词 + 中文 bigram）。
 
-    返回 job_id 或 None（无法判断时）。
+    返回岗位名（唯一键）或 None（无法判断时）。
     """
     if not jobs:
         return None
@@ -198,10 +197,10 @@ def detect_job(
 
     job_scores = []
     for job in jobs:
-        title = re.sub(r"\s+", " ", (job.get("title") or "").strip().lower())
+        name = (job.get("title") or "").strip()  # 岗位名即唯一键（原样返回）
+        title = re.sub(r"\s+", " ", name.lower())  # 仅用于大小写无关匹配
         if not title:
             continue
-        jid = job.get("id", "")
         score = 0
 
         # 1. 沟通职位 ↔ 岗位名 直接对应（最强信号）
@@ -219,7 +218,7 @@ def detect_job(
         score += sum(1 for bg in cn if bg in combined)
 
         if score > 0:
-            job_scores.append((score, jid))
+            job_scores.append((score, name))
 
     if job_scores:
         job_scores.sort(reverse=True)

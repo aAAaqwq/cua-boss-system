@@ -186,7 +186,7 @@ def cmd_rank(conn, args):
         for i, r in enumerate(to_score, 1):
             cdata = build_candidate_data(r)
             if args.job_id:
-                job = next((j for j in jobs if j.get("id") == args.job_id), None)
+                job = next((j for j in jobs if j.get("title") == args.job_id), None)
                 cat = args.category or (
                     infer_category(job.get("title", ""), job.get("requirements", ""))
                     if job else infer_category(cdata.get("job_position") or ""))
@@ -267,7 +267,7 @@ def main():
                    help="强制重新评分(忽略已缓存的 score)")
     p.add_argument("--no-score", action="store_true",
                    help="不调用 DeepSeek，仅按已缓存 score 排行")
-    p.add_argument("--job-id", help="强制指定岗位 id(评分上下文，覆盖自动检测)")
+    p.add_argument("--job-id", help="强制指定岗位名(评分上下文，覆盖自动检测；即岗位 title)")
     p.add_argument("--category", help="强制指定类别 tech/nontech(评分维度)")
     args = p.parse_args()
 

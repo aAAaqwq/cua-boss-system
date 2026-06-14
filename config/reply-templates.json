@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "话术提示词模板 — 三层匹配：岗位专属(jobs.<id>) → 类别(categories.tech/nontech) → 全局兜底(fallback)。命中后作为 DeepSeek「建议回复方向」，AI 结合上下文重写；DeepSeek 不可用时降级为 reply 原文。运行时优先读本地 reply.json，不存在则用本文件兜底。",
+  "description": "话术提示词模板 — 三层匹配：岗位专属(jobs.<岗位名>) → 类别(categories.tech/nontech) → 全局兜底(fallback)。命中后作为 DeepSeek「建议回复方向」，AI 结合上下文重写；DeepSeek 不可用时降级为 reply 原文。运行时优先读本地 reply.json，不存在则用本文件兜底。",
   "_fields": {
     "id": "模板唯一标识（同一分组内唯一）",
     "name": "模板用途说明（人类可读，不参与匹配逻辑）",
@@ -9,7 +9,7 @@
     "priority": "优先级，数字越小越先匹配（同层内升序排序）"
   },
   "_layers": {
-    "jobs": "①岗位专属话术。key = jobs-template.json 中的岗位 id（= 规范化岗位名）；命中此层=最优(match_layer=job)",
+    "jobs": "①岗位专属话术。key = 岗位名(jobs-template.json 中的 title)；命中此层=最优(match_layer=job)",
     "categories": "②类别通用话术。key 固定为 tech / nontech，按岗位 title+requirements 自动推断类别；命中=match_layer=category",
     "fallback": "③全局兜底话术数组；命中=match_layer=fallback"
   },

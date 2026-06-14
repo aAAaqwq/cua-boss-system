@@ -459,11 +459,11 @@ def match_best_job(
     jobs: list[dict],
     config: Optional[dict] = None,
 ) -> str:
-    """让 DeepSeek 从开放岗位列表中判断候选人最匹配的岗位 id。
+    """让 DeepSeek 从开放岗位列表中判断候选人最匹配的岗位名。
 
-    把开放岗位（id/标题/要求摘要）+ 候选人信息交给模型自行判断，
-    比纯关键词匹配更准。返回 job_id；无 API key / 调用失败 /
-    模型返回非法 id 时返回 ""（调用方据此回退）。
+    把开放岗位（岗位名/要求摘要）+ 候选人信息交给模型自行判断，
+    比纯关键词匹配更准。返回岗位名（唯一键）；无 API key / 调用失败 /
+    模型返回非法岗位名时返回 ""（调用方据此回退）。
     """
     if not jobs:
         return ""
@@ -474,12 +474,12 @@ def match_best_job(
     valid_ids = []
     job_lines = []
     for j in jobs:
-        jid = j.get("id", "")
+        jid = j.get("title", "")  # 岗位名即唯一键
         if not jid:
             continue
         valid_ids.append(jid)
         reqs = (j.get("requirements", "") or "").replace("\n", " ")[:200]
-        job_lines.append(f'- id="{jid}" | 标题: {j.get("title", "")} | 要求摘要: {reqs}')
+        job_lines.append(f'- 岗位="{jid}" | 要求摘要: {reqs}')
     jobs_text = "\n".join(job_lines)
 
     # 与评分共用同一份候选人详细数据块（统一输入）
@@ -493,7 +493,7 @@ def match_best_job(
 ## 候选人信息
 {candidate_block}
 
-只返回 JSON（不要解释、不要 markdown 代码块）: {{"job_id": "最匹配岗位的id", "reason": "一句话理由"}}
+只返回 JSON（不要解释、不要 markdown 代码块）: {{"job_id": "最匹配岗位名(须与上面岗位名完全一致)", "reason": "一句话理由"}}
 若实在无法判断，job_id 返回空字符串。"""
 
     payload = json.dumps({
@@ -592,7 +592,7 @@ def evaluate_candidate_auto(
         )
 
     jid = match_job_by_position(candidate_data, jobs, config)
-    job = next((j for j in jobs if j.get("id") == jid), None)
+    job = next((j for j in jobs if j.get("title") == jid), None)
 
     from app.chat_reply import infer_category  # 延迟导入，避免循环依赖
 

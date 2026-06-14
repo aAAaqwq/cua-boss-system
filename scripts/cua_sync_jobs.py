@@ -358,30 +358,29 @@ def extract_edit_page(pid, wid):
     return result
 
 
-def gen_id(title):
-    """岗位唯一标识 = 规范化后的岗位名（折叠空白）
+def norm_title(title):
+    """规范化岗位名（折叠空白）——岗位名即唯一键，无独立 id 字段。
 
-    不再用硬编码的中英文关键词映射表。理由：
-      - BOSS 的真实 jobId 是加密哈希(不可读)，不适合做话术/评分配置的 key；
-      - 岗位名本身在一个账号下唯一、可读，且候选人聊天绑定的 job_position
-        就是岗位名 → 用它做 id 让 chat↔job↔reply-templates↔scoring 四处天然对齐，
-        无需任何关键词映射。
-    (BOSS 真实 jobId 仍会被 extract_edit_page 尽力探测并存入 boss_id 字段备用。)
+    不再生成英文 id：BOSS 真实 jobId 是加密哈希(不可读、不适合做话术/评分 key)，
+    而岗位名本身唯一、可读，且与候选人聊天的 job_position 一致 →
+    用岗位名让 chat↔job↔reply-templates↔scoring 四处天然对齐，无需任何映射。
+    (BOSS 真实 jobId 仍由 extract_edit_page 尽力探测并存入 boss_id 字段备用。)
     """
     return re.sub(r"\s+", " ", (title or "").strip())
 
 
 def dedup(jobs):
+    """按岗位名(唯一键)去重；同名不同薪资极少见，追加后缀保证键唯一"""
     seen, out = {}, []
     for j in jobs:
-        jid = j["id"]
-        key = (j.get("title",""), j.get("salary",""))
-        if jid not in seen:
-            seen[jid] = [key]; out.append(j)
+        title = j.get("title", "")
+        key = (title, j.get("salary", ""))
+        if title not in seen:
+            seen[title] = [key]; out.append(j)
         else:
-            if key in seen[jid]: continue
-            j["id"] = f"{jid}-{len(seen[jid])+1}"
-            seen[jid].append(key); out.append(j)
+            if key in seen[title]: continue
+            j["title"] = f"{title}-{len(seen[title])+1}"
+            seen[title].append(key); out.append(j)
     return out
 
 
@@ -498,9 +497,8 @@ def main():
         time.sleep(2)
 
         detail = extract_edit_page(pid, wid)
-        # 以列表页 title 为准（编辑页表单字段提取不准）
-        detail["title"] = title
-        detail["id"] = gen_id(title)
+        # 以列表页 title 为准（编辑页表单字段提取不准）；岗位名即唯一键，无独立 id
+        detail["title"] = norm_title(title)
 
         key = (title, detail["salary"])
         if key in seen_keys:

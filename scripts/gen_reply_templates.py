@@ -117,7 +117,7 @@ def gen_templates_for_job(job: dict) -> list[dict]:
 def main():
     import argparse
     p = argparse.ArgumentParser(description="根据岗位信息生成专属话术模板")
-    p.add_argument("--job-id", help="目标岗位 id")
+    p.add_argument("--job-id", help="目标岗位名(即岗位 title)")
     p.add_argument("--all", action="store_true", help="为所有岗位生成")
     p.add_argument("--write", action="store_true", help="写入 reply.json")
     args = p.parse_args()
@@ -130,13 +130,13 @@ def main():
     jobs_data = json.loads(JOBS_PATH.read_text(encoding="utf-8"))
     reply_data = json.loads(REPLY_PATH.read_text(encoding="utf-8")) if REPLY_PATH.exists() else {"jobs": {}, "categories": {}, "fallback": []}
 
-    targets = jobs_data["jobs"] if args.all else [j for j in jobs_data["jobs"] if j["id"] == args.job_id]
+    targets = jobs_data["jobs"] if args.all else [j for j in jobs_data["jobs"] if j["title"] == args.job_id]
     if not targets:
         print(f"❌ 找不到岗位: {args.job_id}")
         sys.exit(1)
 
     for job in targets:
-        jid = job["id"]
+        jid = job["title"]  # 岗位名即唯一键
         print(f"\n{'='*60}")
         print(f"生成: {job['title']} ({jid})")
         print(f"{'='*60}")

@@ -1019,7 +1019,7 @@ def review_one_candidate(
     matched_job = None
     if job_id:
         for job in jobs:
-            if job["id"] == job_id:
+            if job.get("title") == job_id:  # 岗位名即唯一键
                 job_templates = job.get("templates", [])
                 category_templates = job.get("category_templates", [])
                 job_context = f"{job['title']} | {job['requirements']} | {job['salary']}"

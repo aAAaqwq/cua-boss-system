@@ -1,8 +1,8 @@
 {
-  "description": "岗位元数据模板 — cua_sync_jobs.py 从 BOSS 职位管理页自动同步：id 由岗位名生成，其余字段从编辑页提取。title 必须与 BOSS 职位列表页完全一致。运行时优先读本地 jobs.json，不存在则用本文件兜底。",
+  "description": "岗位元数据模板 — cua_sync_jobs.py 从 BOSS 职位管理页自动同步：岗位名(title)即唯一键，其余字段从编辑页提取。title 必须与 BOSS 职位列表页完全一致。运行时优先读本地 jobs.json，不存在则用本文件兜底。",
+  "_key": "岗位名(title)即唯一键 —— 无独立 id 字段。岗位名本身唯一、可读，且与候选人聊天的「沟通职位」(job_position) 天然一致，使 chat↔job↔reply-templates↔scoring 四处对齐。reply-templates.json 的 jobs.<岗位名> 与评分配置 job_overrides.<岗位名> 均以岗位名为 key。",
   "_fields": {
-    "id": "岗位唯一标识 = 规范化后的岗位名（gen_id 折叠空白）。不再用英文短横线手填；岗位名本身唯一、可读，且与候选人聊天的「沟通职位」(job_position) 天然一致，使 chat↔job↔reply-templates↔scoring 四处对齐。用于关联 reply-templates.json 的 jobs.<id> 话术与评分配置 job_overrides.<id>",
-    "title": "岗位名称，必须与 BOSS 职位列表页完全一致（sync 脚本按此匹配并覆盖 salary/degree/location/requirements）。通常 id == title",
+    "title": "岗位名称（唯一键），必须与 BOSS 职位列表页完全一致（sync 脚本按此匹配并覆盖 salary/degree/location/requirements）",
     "requirements": "岗位职责/要求全文。注入 DeepSeek 作岗位上下文；超过 220 字会被自动截断（见 chat_reply.JOB_CONTEXT_MAX_CHARS）",
     "salary": "薪资区间，如 16K-30K。可作话术变量 {salary}",
     "degree": "最低学历要求，如 本科/硕士。可作话术变量 {degree}",
@@ -12,7 +12,6 @@
   },
   "jobs": [
     {
-      "id": "后端开发工程师（示例）",
       "title": "后端开发工程师（示例）",
       "requirements": "示例：负责核心服务端开发，5年以上 Java/Go 经验，有高并发架构经验优先。此文本将作为 DeepSeek 生成回复时的岗位上下文。",
       "salary": "16K-30K",
