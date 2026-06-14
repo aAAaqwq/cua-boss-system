@@ -27,7 +27,18 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school, check_candidate, check_degree
-from app.chat_reply import load_jobs_config, generate_reply, detect_job, check_deepseek_configured
+from app.chat_reply import (
+    load_jobs_config, generate_reply, detect_job, check_deepseek_configured,
+    MATCH_JOB, MATCH_CATEGORY, MATCH_FALLBACK, MATCH_NONE, SOURCE_TEMPLATE,
+)
+
+# 模板命中层级中文标签（日志/告警用）
+_LAYER_LABEL = {
+    MATCH_JOB: "①岗位专属",
+    MATCH_CATEGORY: "②类别通用",
+    MATCH_FALLBACK: "③全局兜底",
+    MATCH_NONE: "✗未命中",
+}
 from app.db import DB_PATH
 from scripts.boss_click_buheshi import click_buheshi
 
@@ -456,6 +467,110 @@ def click_contact(pid: int, window_id: int, name: str) -> tuple[bool, Optional[s
 
 
 # ══════════════════════════════════════════════════
+# JS DOM 聊天历史提取 — 主路径(A)
+# ══════════════════════════════════════════════════
+
+def _js_chat_history(pid: int, window_id: int) -> list[dict]:
+    """主路径(A): 用 JS 读取 DOM 聊天气泡，按 CSS class 判定角色
+
+    相比 AX 兜底（依赖瞬时的 送达/已读 投递标记，最新消息常因未读/刚发出而漏判），
+    DOM 气泡的方向性 class 是稳定的、与投递状态无关的角色信号。
+
+    BOSS 对话气泡通常带方向性 class（item-myself / item-friend 等）。本函数尝试多种
+    选择器，取匹配最多的一组，按 class 正则判定:
+      - 含 myself/mine/self/send 等 → boss(我方)
+      - 含 friend/other/geek/receive 等 → candidate(候选人)
+    class 无法判定时回退到气泡水平位置（中心点偏右=我方）。
+
+    保守策略: 仅当至少一条消息靠 class 判定成功(conf>=1)才采信，否则返回 []，
+    由 read_conversation 回退 AX 兜底，避免在未知 DOM 结构上误判。
+
+    Returns: [{"role": "boss"|"candidate", "content": str}, ...] 最近 10 条
+    """
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": window_id,
+        "action": "execute_javascript",
+        "javascript": """
+        (function(){
+            var sels = ['[class*="message-item"]','[class*="chat-item"]',
+                        '[class*="msg-item"]','[class*="message-content"]'];
+            var best=null, bestCount=0, bestSel='';
+            for (var s=0;s<sels.length;s++){
+                var nodes=document.querySelectorAll(sels[s]);
+                if (nodes.length>bestCount){bestCount=nodes.length;best=nodes;bestSel=sels[s];}
+            }
+            if (!best || bestCount===0)
+                return JSON.stringify({status:'no_nodes',selector:'',conf:0,messages:[]});
+            var msgs=[], conf=0, winW=window.innerWidth||1200;
+            for (var i=0;i<best.length;i++){
+                var el=best[i];
+                var txt=(el.textContent||'').trim();
+                if (!txt || txt.length<2) continue;
+                var cls=((el.className||'')+' '+
+                         ((el.parentElement&&el.parentElement.className)||'')).toString();
+                var role=null;
+                if (/myself|mine|self|owner|host|send|sender/i.test(cls)){role='boss';conf++;}
+                else if (/friend|other|geek|receive|recv|candidate/i.test(cls)){role='candidate';conf++;}
+                if (!role){
+                    var rc=el.getBoundingClientRect();
+                    role=(rc.left+rc.width/2)>winW*0.55?'boss':'candidate';
+                }
+                msgs.push({role:role,content:txt.slice(0,500)});
+            }
+            return JSON.stringify({status:'ok',selector:bestSel,conf:conf,messages:msgs});
+        })()
+        """,
+    }))
+
+    # 解析 cua-driver 返回（与 click_contact 同款多形态处理）
+    payload = None
+    if isinstance(r, dict) and "status" in r and "messages" in r:
+        payload = r
+    else:
+        raw = ""
+        if isinstance(r, list):
+            raw = " ".join(str(x) for x in r)
+        elif isinstance(r, dict):
+            raw = str(r.get("result", r.get("text", "")))
+        try:
+            payload = json.loads(raw) if raw else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+
+    if not isinstance(payload, dict):
+        return []
+
+    raw_msgs = payload.get("messages") or []
+    conf = payload.get("conf") or 0
+    selector = payload.get("selector") or ""
+
+    # 保守策略: 无 class 级角色信号则放弃，回退 AX
+    if conf < 1 or not raw_msgs:
+        if raw_msgs:
+            print(f"    ⚠ JS 提取到 {len(raw_msgs)} 条但无 class 角色信号"
+                  f"(selector={selector or '无'})，回退 AX")
+        return []
+
+    # 规范化 + 去重（保序）
+    seen = set()
+    deduped = []
+    for m in raw_msgs:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role not in ("boss", "candidate") or len(content) < 2:
+            continue
+        key = (role, " ".join(content.split()))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"role": role, "content": content})
+
+    return deduped[-10:]
+
+
+# ══════════════════════════════════════════════════
 # AX 兜底聊天历史提取 — JS 提取失败时使用
 # ══════════════════════════════════════════════════
 
@@ -541,10 +656,10 @@ def _ax_fallback_chat_history(tree: str) -> list[dict]:
 
     for i, (idx, val) in enumerate(panel):
 
-        # [送达]/[已读] → 标记下一条为我们发的
-        # 左侧联系人列表: [送达]/[已读] (带方括号)
-        # 右侧对话面板: 送达/已读 (无方括号)
-        if val in ("[送达]", "[已读]", "送达", "已读"):
+        # 送达/已读/未读/已送达 → 标记下一条为我们发的
+        # 左侧联系人列表带方括号；右侧对话面板无方括号
+        # "未读"/"已送达" 覆盖刚发出尚未被对方读取的最新消息（否则会漏判成候选人发的）
+        if val in ("[送达]", "[已读]", "[未读]", "送达", "已读", "未读", "已送达"):
             next_is_self = True
             continue
 
@@ -656,14 +771,21 @@ def read_conversation(pid: int, window_id: int) -> dict:
                     result["info_line"] = info
 
     # ── 2. 读取聊天历史 ──
-    # 核心: AX 树中 送达/已读 标记后面的消息是我们发的，其余都是候选人发的
-    ax_history = _ax_fallback_chat_history(tree)
-    if ax_history:
-        result["chat_history"] = ax_history
-        result["last_sender"] = ax_history[-1].get("role", "")
+    # 主路径(A): JS 读 DOM 气泡按 class 判定角色（不依赖瞬时投递标记，最新消息也能正确判断）
+    # 兜底: JS 失败 → AX 树 送达/已读 标记推断
+    history = _js_chat_history(pid, window_id)
+    source = "JS-DOM"
+    if not history:
+        history = _ax_fallback_chat_history(tree)
+        source = "AX兜底"
+
+    if history:
+        result["chat_history"] = history
+        result["last_sender"] = history[-1].get("role", "")
+        print(f"    聊天历史: {len(history)}条 (来源={source})")
 
         # 找到最后一条候选人消息
-        for msg in reversed(ax_history):
+        for msg in reversed(history):
             if msg.get("role") == "candidate" and len(msg.get("content", "")) >= 4:
                 result["latest_candidate_msg"] = msg["content"]
                 break
@@ -671,8 +793,8 @@ def read_conversation(pid: int, window_id: int) -> dict:
         if not result["last_sender"]:
             print("    ⚠ 聊天历史提取成功，但无法判断最后发送者")
     elif tree:
-        # AX 树存在但未提取到聊天历史 → BOSS 面板结构可能变化
-        print("    ⚠ AX 聊天历史提取失败（右侧面板可能结构变化），将无上下文生成回复")
+        # JS + AX 均未提取到聊天历史 → BOSS 面板结构可能变化
+        print("    ⚠ 聊天历史提取失败（JS+AX 均未命中，右侧面板可能结构变化），将无上下文生成回复")
 
     return result
 
@@ -847,6 +969,18 @@ def review_one_candidate(
         print(f"    → 已回复过（上一句是我们发的），跳过")
         return {"status": "already_replied", "name": name, "uid": contact_uid, "chat_history": convo.get("chat_history", [])}
 
+    # d2. 安全网(C): 不依赖 AX 投递标记，用 DB 历史判断"是否已回复过最新消息"。
+    #     DB 最后一条非系统消息是我方(boss)，且候选人最新消息已在 DB 历史中(无新消息) → 跳过。
+    #     专治"刚发出的消息未读/无标记被误判成 candidate，导致重复回复"。
+    if db and latest_msg:
+        db_msgs = [m for m in ctx.get("db_chat_history", []) if m.get("role") != "system"]
+        if db_msgs and db_msgs[-1].get("role") == "boss":
+            latest_norm = " ".join(latest_msg.split())
+            db_contents = {" ".join((m.get("content") or "").split()) for m in db_msgs}
+            if latest_norm in db_contents:
+                print(f"    → 已回复过（DB 显示最新消息已回复，无新消息），跳过 [安全网]")
+                return {"status": "already_replied", "name": name, "uid": contact_uid, "chat_history": convo.get("chat_history", [])}
+
     # d. 学校筛选
     school_ok = school and match_school(school, school_whitelist)
 
@@ -902,7 +1036,9 @@ def review_one_candidate(
         seen_keys = set()
         deduped = []
         for msg in merged:
-            key = (msg.get("role", ""), msg.get("content", ""))
+            # 归一化空白后比较：AX 抽取与 DB 存储的同一句常因空白/换行差异导致去重失效
+            norm_content = " ".join((msg.get("content") or "").split())
+            key = (msg.get("role", ""), norm_content)
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped.append(msg)
@@ -911,7 +1047,7 @@ def review_one_candidate(
     if not chat_history:
         print("    ⚠ 无聊天历史（AX+DB均为空），DeepSeek 将仅凭最新消息生成回复")
 
-    reply = generate_reply(
+    gen = generate_reply(
         latest_msg,
         templates=[],  # 旧格式兼容（jobs模式下为空）
         candidate_name=name,
@@ -923,6 +1059,19 @@ def review_one_candidate(
         job=matched_job,
         stage_context=stage_context,
     )
+    reply = gen["reply"]
+    match_layer = gen["match_layer"]
+    reply_source = gen["source"]
+
+    # 模板命中层级可观测性：未命中①岗位专属即告警，提示补充该岗位话术
+    layer_label = _LAYER_LABEL.get(match_layer, match_layer)
+    if match_layer == MATCH_JOB:
+        print(f"    模板层: {layer_label} ✓")
+    else:
+        hint = f"（岗位={job_id or '未识别'}）" if match_layer != MATCH_NONE else "（无任何关键词命中）"
+        print(f"    ⚠ 模板层: {layer_label}{hint} — 未命中岗位专属模板，建议补充该岗位话术")
+    if reply_source == SOURCE_TEMPLATE:
+        print(f"    ⚠ DeepSeek 未生效，已降级为模板原文")
 
     # 兜底: 回复还在问已有的东西 → 用阶段兜底文本替换
     if _reply_redundant(reply, ctx):
@@ -950,6 +1099,8 @@ def review_one_candidate(
         "school": school,
         "degree": degree,
         "reply": reply,
+        "match_layer": match_layer,
+        "reply_source": reply_source,
         "chat_history": chat_history,
     }
 
@@ -1218,6 +1369,7 @@ def main():
     import sqlite3 as _sqlite3
     db = _sqlite3.connect(str(DB_PATH))
 
+    replied_results = []  # 收集已回复结果，用于结尾模板层级统计
     for i, contact in enumerate(contacts):
         print(f"\n  [{i + 1}/{len(contacts)}] {contact.get('name', '?')} "
               f"| {contact.get('job', '?')} | {contact.get('time', '?')}")
@@ -1233,6 +1385,8 @@ def main():
             pid, wid, contact, school_whitelist, jobs_config, args.min_degree, args.dry_run,
             db=db,
         )
+        if result.get("status") == "replied":
+            replied_results.append(result)
 
         # 存聊天记录到 candidates.db
         chat_history = result.get("chat_history")
@@ -1247,8 +1401,40 @@ def main():
             time.sleep(delay)
 
     db.close()
+    _print_layer_summary(replied_results)
     print(f"\n{'=' * 60}")
     print(f"审查完成，聊天记录已存入 {DB_PATH}")
+    print(f"{'=' * 60}")
+
+
+def _print_layer_summary(replied_results: list[dict]) -> None:
+    """结尾打印模板命中层级统计；未命中①岗位专属的逐条给出 warning"""
+    if not replied_results:
+        return
+
+    counts = {MATCH_JOB: 0, MATCH_CATEGORY: 0, MATCH_FALLBACK: 0, MATCH_NONE: 0}
+    for r in replied_results:
+        counts[r.get("match_layer", MATCH_NONE)] = counts.get(r.get("match_layer", MATCH_NONE), 0) + 1
+
+    total = len(replied_results)
+    print(f"\n{'=' * 60}")
+    print(f"模板命中层级统计（共 {total} 条回复）")
+    for layer in (MATCH_JOB, MATCH_CATEGORY, MATCH_FALLBACK, MATCH_NONE):
+        n = counts.get(layer, 0)
+        if n:
+            pct = n * 100 // total
+            print(f"  {_LAYER_LABEL[layer]}: {n} 条 ({pct}%)")
+
+    # 未命中①岗位专属的候选人 → warning 列表
+    non_job = [r for r in replied_results if r.get("match_layer") != MATCH_JOB]
+    if non_job:
+        print(f"\n  ⚠ {len(non_job)} 条未命中①岗位专属模板，建议为对应岗位补充话术：")
+        for r in non_job:
+            layer = _LAYER_LABEL.get(r.get("match_layer"), r.get("match_layer"))
+            degraded = "（DeepSeek降级）" if r.get("reply_source") == SOURCE_TEMPLATE else ""
+            print(f"    - {r.get('name', '?')}: {layer}{degraded}")
+    else:
+        print(f"\n  ✓ 全部命中①岗位专属模板")
     print(f"{'=' * 60}")
 
 

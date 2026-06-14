@@ -28,25 +28,12 @@ CHROME = "com.google.Chrome"
 JOB_LIST = "https://www.zhipin.com/web/chat/job/list"
 CHAT = "https://www.zhipin.com/web/chat/index"
 CONFIG = Path(__file__).parent.parent / "config" / "jobs.json"
-TEMPLATE_PATH = Path(__file__).parent.parent / "config" / "jobs-template.json"
 
 NAV_LINKS = {
     "职位管理","推荐牛人","搜索","沟通","意向沟通","互动","牛人管理",
     "道具","工具箱","更多","直聘企业版","招聘规范","","投递保",
     "关闭","编辑","1","2","直播招聘","道具 首充礼",
 }
-
-ID_MAP = [
-    ("首席科学家","chief-scientist"),("技术合伙人","tech-partner"),
-    ("运营实习生","ai-ops-intern"),("技术实习生","tech-intern"),
-    ("产品经理","ai-product-manager"),("技术总监","tech-director"),
-    ("合伙人","partner"),("全栈","ai-fullstack"),
-    ("运营","ai-ops-intern"),("开发","dev"),("标注","annotation"),
-    ("总监","director"),("助理","assistant"),("销售","sales"),
-    ("咨询","consulting"),("实习","tech-intern"),
-]
-# ↑ 按 key 长度降序排列：长的优先匹配，避免 "全栈开发" 被 "开发" 误匹配
-
 
 def cua(*args):
     cmd = ["cua-driver", "call"] + list(args)
@@ -182,7 +169,7 @@ def extract_edit_page(pid, wid):
     tree = ax_tree(pid, wid)
     result = {
         "title": "", "requirements": "", "salary": "",
-        "degree": "", "location": "", "experience": "",
+        "degree": "", "location": "", "experience": "", "boss_id": "",
     }
     salary_tokens = []  # AXStaticText 字符串序列（如 ["40k","-","55k"] 或 ["120","-","180","元/天"]）
     in_salary_section = False
@@ -320,6 +307,33 @@ def extract_edit_page(pid, wid):
     if js_text and len(js_text) > 5:
         result["requirements"] = js_text.strip()
 
+    # ★ 尽力探测 BOSS 真实 jobId（编辑页 URL/DOM 携带当前岗位 id）
+    # 探测到则存入 boss_id 备用；探测不到不影响主流程（id 仍用岗位名）
+    rj = cua("page", json.dumps({
+        "pid": pid, "window_id": wid,
+        "action": "execute_javascript",
+        "javascript": """
+        (function(){
+            var jid = "";
+            try {
+                var m = (location.href || "").match(/(?:encryptJobId|jobId|jobid)=([^&#]+)/i);
+                if (m) jid = m[1];
+                if (!jid) {
+                    var el = document.querySelector(
+                        '[data-jobid],[data-job-id],[data-encryptjobid],[data-encrypt-job-id]');
+                    if (el) jid = el.getAttribute('data-jobid') || el.getAttribute('data-job-id')
+                                || el.getAttribute('data-encryptjobid')
+                                || el.getAttribute('data-encrypt-job-id') || "";
+                }
+            } catch(e) {}
+            return JSON.stringify({jobId: jid});
+        })()
+        """,
+    }))
+    boss_id = rj.get("jobId", "") if isinstance(rj, dict) else ""
+    if boss_id and isinstance(boss_id, str):
+        result["boss_id"] = boss_id.strip()
+
     # 薪资兜底: 从 requirements 文本中匹配
     if not result["salary"] and result["requirements"]:
         reqs = result["requirements"]
@@ -345,9 +359,16 @@ def extract_edit_page(pid, wid):
 
 
 def gen_id(title):
-    for cn, en in ID_MAP:
-        if cn in title.lower() or cn in title: return en
-    return re.sub(r'[^a-z0-9]+', '-', title.lower())[:30]
+    """岗位唯一标识 = 规范化后的岗位名（折叠空白）
+
+    不再用硬编码的中英文关键词映射表。理由：
+      - BOSS 的真实 jobId 是加密哈希(不可读)，不适合做话术/评分配置的 key；
+      - 岗位名本身在一个账号下唯一、可读，且候选人聊天绑定的 job_position
+        就是岗位名 → 用它做 id 让 chat↔job↔reply-templates↔scoring 四处天然对齐，
+        无需任何关键词映射。
+    (BOSS 真实 jobId 仍会被 extract_edit_page 尽力探测并存入 boss_id 字段备用。)
+    """
+    return re.sub(r"\s+", " ", (title or "").strip())
 
 
 def dedup(jobs):
@@ -377,68 +398,6 @@ def load_existing_templates():
             return tpls, old.get("fallback_templates", [])
         except: pass
     return {}, []
-
-
-def load_job_template() -> dict:
-    """从 jobs-template.json 读取手动维护的元数据（id→title 映射）"""
-    if not TEMPLATE_PATH.exists():
-        return {}
-    try:
-        data = json.loads(TEMPLATE_PATH.read_text(encoding="utf-8"))
-        mapping = {}
-        for j in data.get("jobs", []):
-            jid = j.get("id", "")
-            if jid:
-                mapping[jid] = {
-                    "template_title": j.get("title", ""),
-                }
-        return mapping
-    except (json.JSONDecodeError, KeyError):
-        return {}
-
-
-def merge_template_metadata(jobs: list[dict]) -> list[dict]:
-    """将 jobs-template.json 中的 id 覆盖合并到提取的岗位数据
-
-    策略: 模板 title 精确匹配 → 模板 id 权威覆盖。
-    模糊匹配不覆盖 id（避免不同岗位被错误合并到同一 id）。
-    """
-    template = load_job_template()
-    if not template:
-        return jobs
-
-    for job in jobs:
-        jid = job.get("id", "")
-        title = job.get("title", "")
-
-        # 模板 title 精确匹配 → 模板 id 权威覆盖
-        for tid, tmeta in template.items():
-            ttitle = tmeta.get("template_title", "")
-            if ttitle == title:
-                job["id"] = tid
-                break
-
-    # 去重检查: 检测是否有两个不同 title 的岗位共享同一 id
-    id_titles = {}
-    for job in jobs:
-        jid = job.get("id", "")
-        title = job.get("title", "")
-        if jid not in id_titles:
-            id_titles[jid] = []
-        id_titles[jid].append(title)
-    for jid, titles in id_titles.items():
-        if len(titles) > 1:
-            # 碰撞: 给后面的岗位追加后缀
-            for job in jobs:
-                if job.get("id") == jid and job.get("title") != titles[0]:
-                    suffix = 2
-                    new_id = f"{jid}-{suffix}"
-                    while any(j.get("id") == new_id for j in jobs):
-                        suffix += 1
-                        new_id = f"{jid}-{suffix}"
-                    job["id"] = new_id
-
-    return jobs
 
 
 def main():
@@ -550,6 +509,8 @@ def main():
         seen_keys.add(key)
         extracted.append(detail)
         print(f"    ✓ {title} | {detail['salary'] or '?'} | {detail['degree'] or '?'}")
+        if detail.get("boss_id"):
+            print(f"      BOSS jobId: {detail['boss_id']}")
         reqs = (detail.get('requirements') or '')[:80]
         if reqs: print(f"      要求: {reqs}")
 
@@ -565,10 +526,13 @@ def main():
     if not extracted:
         print("\n❌ 未提取到任何岗位"); sys.exit(1)
 
-    # ④ 去重 + 合并模板元数据 + 合并话术
+    # ④ 去重 + 合并话术
     print(f"\n④ 处理...")
     extracted = dedup(extracted)
-    extracted = merge_template_metadata(extracted)
+    # 清理空 boss_id（探测不到则不写入配置，保持干净）
+    for j in extracted:
+        if not j.get("boss_id"):
+            j.pop("boss_id", None)
     old_templates, fallback = load_existing_templates()
 
     for j in extracted:
