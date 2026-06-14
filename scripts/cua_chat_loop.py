@@ -735,6 +735,7 @@ def read_conversation(pid: int, window_id: int) -> dict:
         "chat_history": [],
         "last_sender": "",
         "latest_candidate_msg": "",
+        "job_position": "",  # 右侧面板权威沟通岗位（= BOSS 招聘岗位名，与 jobs 配置 key 对齐）
     }
 
     # ── 1. AX 树读取候选人信息 ──
@@ -744,6 +745,14 @@ def read_conversation(pid: int, window_id: int) -> dict:
     if tree:
         for line in tree.split("\n"):
             s = line.strip()
+            # 沟通岗位 (右侧面板日期分割线: "6月3日 沟通的职位-开发")
+            # 这是 BOSS 招聘岗位名（与 jobs 配置 key 对齐），权威来源，优先于左侧列表
+            if not result["job_position"]:
+                jm = re.search(r'沟通的职位[-－—:：]\s*(.+?)\s*"', s)
+                if jm:
+                    pos = jm.group(1).strip()
+                    if pos and len(pos) <= 30:
+                        result["job_position"] = pos
             # 学校 (独立出现)
             m = re.search(r'AXStaticText\s*=\s*"([一-龥]{2,8}(?:大学|学院|学校))"', s)
             if m and not result["school"]:
@@ -941,11 +950,15 @@ def review_one_candidate(
     info_line = convo.get("info_line", "")
     latest_msg = convo.get("latest_candidate_msg", "")
     last_sender = convo.get("last_sender", "")
+    # 右侧面板权威沟通岗位（= BOSS 招聘岗位名）；提取不到则回退左侧列表 contact["job"]
+    job_position = convo.get("job_position", "") or contact.get("job", "")
 
     # 输出审查信息
     school_flag = "✅" if school and match_school(school, school_whitelist) else "❌"
     reply_flag = "🟢待回复" if last_sender == "candidate" else "🔵已回复"
+    pos_src = "右侧面板" if convo.get("job_position") else ("左侧列表" if contact.get("job") else "无")
     print(f"    信息: {info_line or '?'}")
+    print(f"    沟通岗位: {job_position or '?'} (来源={pos_src})")
     print(f"    学校: {school or '?'} {school_flag} | 学历: {degree or '?'} | {reply_flag}")
     if latest_msg:
         print(f"    最新: {latest_msg[:60]}")
@@ -967,7 +980,7 @@ def review_one_candidate(
     # d. 最后一条是我们发的 → 已回复，跳过
     if last_sender == "boss":
         print(f"    → 已回复过（上一句是我们发的），跳过")
-        return {"status": "already_replied", "name": name, "uid": contact_uid, "chat_history": convo.get("chat_history", [])}
+        return {"status": "already_replied", "name": name, "uid": contact_uid, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
 
     # d2. 安全网(C): 不依赖 AX 投递标记，用 DB 历史判断"是否已回复过最新消息"。
     #     DB 最后一条非系统消息是我方(boss)，且候选人最新消息已在 DB 历史中(无新消息) → 跳过。
@@ -979,7 +992,7 @@ def review_one_candidate(
             db_contents = {" ".join((m.get("content") or "").split()) for m in db_msgs}
             if latest_norm in db_contents:
                 print(f"    → 已回复过（DB 显示最新消息已回复，无新消息），跳过 [安全网]")
-                return {"status": "already_replied", "name": name, "uid": contact_uid, "chat_history": convo.get("chat_history", [])}
+                return {"status": "already_replied", "name": name, "uid": contact_uid, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
 
     # d. 学校筛选
     school_ok = school and match_school(school, school_whitelist)
@@ -991,7 +1004,7 @@ def review_one_candidate(
             click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
-        return {"status": "unsuitable", "name": name, "uid": contact_uid, "school": school_str, "chat_history": convo.get("chat_history", [])}
+        return {"status": "unsuitable", "name": name, "uid": contact_uid, "school": school_str, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
 
     # e. 学历筛选
     if degree and not check_degree(degree, min_degree):
@@ -1000,7 +1013,7 @@ def review_one_candidate(
             click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
-        return {"status": "rejected_degree", "name": name, "uid": contact_uid, "degree": degree, "chat_history": convo.get("chat_history", [])}
+        return {"status": "rejected_degree", "name": name, "uid": contact_uid, "degree": degree, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
 
     # f. 无候选人消息
     if not latest_msg:
@@ -1098,6 +1111,7 @@ def review_one_candidate(
         "uid": contact_uid,
         "school": school,
         "degree": degree,
+        "job_position": job_position,
         "reply": reply,
         "match_layer": match_layer,
         "reply_source": reply_source,
@@ -1251,9 +1265,10 @@ def _save_chat_history(
     """
     name = result.get("name") or contact.get("name", "")
     uid = result.get("uid") or contact.get("uid")
-    school = result.get("school") or contact.get("job", "")
+    school = result.get("school") or ""  # 不再误用 contact["job"] 作学校兜底
     degree = result.get("degree") or ""
-    job_pos = contact.get("job", "")
+    # 沟通岗位：优先 result（右侧面板权威值），回退左侧列表 contact["job"]
+    job_pos = result.get("job_position") or contact.get("job", "")
     history_json = json.dumps(chat_history, ensure_ascii=False)
     status = result.get("status", "unknown")
 
@@ -1289,10 +1304,17 @@ def _save_chat_history(
                 deduped.append(msg)
         merged_json = json.dumps(deduped[-20:], ensure_ascii=False)  # 保留最近20条
 
-        db.execute(
-            "UPDATE candidates SET chat_history = ?, status = ? WHERE id = ?",
-            (merged_json, status, row[0]),
-        )
+        # job_position 仅在拿到非空值时刷新，避免用空值覆盖已有的好数据
+        if job_pos:
+            db.execute(
+                "UPDATE candidates SET chat_history = ?, status = ?, job_position = ? WHERE id = ?",
+                (merged_json, status, job_pos, row[0]),
+            )
+        else:
+            db.execute(
+                "UPDATE candidates SET chat_history = ?, status = ? WHERE id = ?",
+                (merged_json, status, row[0]),
+            )
     else:
         # 新建记录（含 uid，便于后续 collect 脚本精准匹配）
         db.execute(
