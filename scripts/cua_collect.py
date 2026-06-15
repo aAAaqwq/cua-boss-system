@@ -396,22 +396,39 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     }))
 
     # 等待下载完成
-    for _ in range(15):
-        time.sleep(1)
+    # Chrome 下载先落地为 *.crdownload 临时文件，完成后才重命名为最终文件，
+    # 直接拷贝临时文件会在重命名瞬间触发 FileNotFoundError —— 必须忽略未完成的临时文件。
+    _PARTIAL_SUFFIXES = (".crdownload", ".download", ".part", ".tmp")
+
+    def _completed_new_files() -> list[Path]:
         after = set(str(p) for p in dl_dir.iterdir())
-        new = after - before
-        if new:
-            src = Path(list(new)[0])
-            # 等待文件写入稳定
-            for __ in range(10):
-                s1 = src.stat().st_size if src.exists() else 0
-                time.sleep(0.5)
-                s2 = src.stat().st_size if src.exists() else 0
-                if s1 == s2 and s1 > 0:
-                    break
+        return [
+            Path(p) for p in (after - before)
+            if not p.endswith(_PARTIAL_SUFFIXES)
+        ]
+
+    for _ in range(20):
+        time.sleep(1)
+        done = _completed_new_files()
+        if not done:
+            continue
+        src = done[0]
+        # 等待文件写入稳定
+        s2 = 0
+        for __ in range(10):
+            s1 = src.stat().st_size if src.exists() else 0
+            time.sleep(0.5)
+            s2 = src.stat().st_size if src.exists() else 0
+            if s1 == s2 and s1 > 0:
+                break
+        try:
             shutil.copy2(str(src), str(dest))
-            print(f"    📥 附件下载: {dest} ({s2:,} bytes)")
-            return str(dest)
+        except (FileNotFoundError, OSError) as e:
+            # 拷贝失败不应中断整轮收集：简历正文已在上游提取并入库
+            print(f"    ⚠ 附件拷贝失败({e}), 跳过本地保存")
+            return None
+        print(f"    📥 附件下载: {dest} ({s2:,} bytes)")
+        return str(dest)
 
     # 策略2: 用 urllib 直连下载（可能无登录态）
     try:
@@ -810,6 +827,52 @@ def extract_resume_text(pid, wid, expected_name: str = ""):
     return result
 
 
+def extract_pdf_text_quartz(pdf_path: str, expected_name: str = "") -> str:
+    """用 macOS 原生 Quartz/PDFKit 直接解析已下载的 PDF 文件正文。
+
+    比 BOSS 预览的 AX 树提取更可靠：读全部页、不受滚动/渲染时序/AX 截断影响，
+    是 AX 提取失败(返回空/不足)时的兜底。pyobjc 不可用或解析失败时返回 ""。
+    expected_name 用于校验 PDF 确实属于当前候选人，避免串档。
+    """
+    if not pdf_path:
+        return ""
+    try:
+        import Quartz
+        from Foundation import NSURL
+    except Exception:
+        return ""  # pyobjc/Quartz 不可用 → 优雅降级
+    try:
+        url = NSURL.fileURLWithPath_(str(pdf_path))
+        doc = Quartz.PDFDocument.alloc().initWithURL_(url)
+        if doc is None:
+            return ""
+        raw = doc.string() or ""
+    except Exception:
+        return ""
+
+    # 清洗: 去 BOSS 水印 token + 空行规整。BOSS 水印是混合大小写 base64 串、以 ~~ 收尾
+    # (如 f4c4e18f...Vq3A~~)，旧的纯小写 hex 正则漏掉，这里覆盖两种形态。
+    cleaned = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if re.match(r'^[A-Za-z0-9_/+-]{20,}~+$', s):  # base64 水印(以波浪号收尾)
+            continue
+        if re.match(r'^[a-f0-9]{20,}~*$', s):          # 纯 hex 水印(兼容旧形态)
+            continue
+        if re.match(r'^[~\-]{1,3}$', s):                # 水印残留的孤立波浪号/横线行
+            continue
+        cleaned.append(s)
+    text = "\n".join(cleaned).strip()
+
+    # 校验归属(姓名整体出现，或被 PDF 排版拆字时逐字均在全文)
+    if expected_name and text and len(expected_name) >= 2:
+        if expected_name not in text and not all(c in text for c in expected_name):
+            return ""
+    return text
+
+
 # ══════════════════════════════════════════════════
 # SQLite（init_db / upsert）
 # ══════════════════════════════════════════════════
@@ -854,23 +917,53 @@ def upsert(conn, data):
             data.get("notes",""), datetime.now().isoformat(),
         ))
     else:
-        # 无 uid: 直接插入（无唯一键可冲突）
-        conn.execute("""
-            INSERT INTO candidates
-                (name, job_position, school, degree, resume_content, resume_filename,
-                 resume_path, has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        # 无 uid: 先按 name+job_position 尝试 UPDATE，命中则合并(避免重复孤儿行)，
+        # 未命中再 INSERT。盲插入会在 uid 缺失时产生重复行(历史 bug)。
+        name = data.get("name", "")
+        job = data.get("job", "")
+        cur = conn.execute("""
+            UPDATE candidates SET
+                school = ?, degree = ?,
+                resume_content = CASE WHEN ? != '' THEN ? ELSE resume_content END,
+                resume_filename = CASE WHEN ? != '' THEN ? ELSE resume_filename END,
+                resume_path = CASE WHEN ? != '' THEN ? ELSE resume_path END,
+                has_resume = CASE WHEN ? = 1 THEN 1 ELSE has_resume END,
+                wechat = CASE WHEN ? != '' THEN ? ELSE wechat END,
+                has_wechat = CASE WHEN ? = 1 THEN 1 ELSE has_wechat END,
+                phone = CASE WHEN ? != '' THEN ? ELSE phone END,
+                email = CASE WHEN ? != '' THEN ? ELSE email END,
+                status = ?, notes = ?, extracted_at = CURRENT_TIMESTAMP
+            WHERE name = ? AND job_position = ?
         """, (
-            data.get("name",""), data.get("job",""),
             data.get("school",""), data.get("degree",""),
-            data.get("resume_content",""), data.get("resume_filename",""),
-            data.get("resume_path",""),
+            data.get("resume_content",""), data.get("resume_content",""),
+            data.get("resume_filename",""), data.get("resume_filename",""),
+            data.get("resume_path",""), data.get("resume_path",""),
             1 if data.get("has_resume") else 0,
-            data.get("wechat",""), 1 if data.get("has_wechat") else 0,
-            data.get("phone",""), data.get("email",""),
-            data.get("score",0), data.get("status","collected"),
-            data.get("notes",""), datetime.now().isoformat(),
+            data.get("wechat",""), data.get("wechat",""),
+            1 if data.get("has_wechat") else 0,
+            data.get("phone",""), data.get("phone",""),
+            data.get("email",""), data.get("email",""),
+            data.get("status","collected"), data.get("notes",""),
+            name, job,
         ))
+        if cur.rowcount == 0:
+            conn.execute("""
+                INSERT INTO candidates
+                    (name, job_position, school, degree, resume_content, resume_filename,
+                     resume_path, has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                name, job,
+                data.get("school",""), data.get("degree",""),
+                data.get("resume_content",""), data.get("resume_filename",""),
+                data.get("resume_path",""),
+                1 if data.get("has_resume") else 0,
+                data.get("wechat",""), 1 if data.get("has_wechat") else 0,
+                data.get("phone",""), data.get("email",""),
+                data.get("score",0), data.get("status","collected"),
+                data.get("notes",""), datetime.now().isoformat(),
+            ))
     conn.commit()
 
 
@@ -962,6 +1055,10 @@ def main():
                 clicked, contact_uid = click_sidebar(name, pid, wid)
         if not clicked:
             print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
+        # AX 点击不提取 uid，单独再读一次 data-id（不重新点击）。
+        # uid 是与 chat_loop 关联的唯一键，缺失会导致简历写入孤儿行、无法注入聊天。
+        if not contact_uid:
+            contact_uid = get_contact_uid(name, pid, wid)
         if contact_uid:
             print(f"    uid: {contact_uid}")
         time.sleep(2)  # 等右侧面板加载
@@ -1001,22 +1098,41 @@ def main():
                 if row and row[0]:
                     existing_resume = row[0]
 
+            resume_action = ""
             if existing_resume:
                 resume_content = existing_resume
                 print(f"    → 简历: 已存在({len(resume_content)}字), 跳过提取")
             else:
                 result = click_attachment_resume(pid, wid, name)
                 resume_content = result.get("resume_content", "")
+                resume_action = result.get("action", "")
 
-            # 附件下载: 从 PDF viewer iframe 提取 URL 并下载到本地
+            # 附件下载 + PDF 直解析。
+            # 关键修正: 下载不再以 AX 是否提到正文为前提——只要 PDF 可得(action=extract)
+            # 就下载，再用 Quartz 直接解析 PDF 文件(比 AX 树更可靠)。这样即便 AX 提取为空
+            # (李艳萍即此例: PDF 已下载到 data/ 但 AX 提取失败、正文未入库)也能补回正文。
             resume_path = ""
-            if not args.dry_run and resume_content:
-                resume_path = _download_attachment(
-                    pid, wid, name,
-                    filename=panel.get("resume_filename", ""),
-                ) or ""
+            if not args.dry_run and not existing_resume and resume_action == "extract":
+                try:
+                    resume_path = _download_attachment(
+                        pid, wid, name,
+                        filename=panel.get("resume_filename", ""),
+                    ) or ""
+                except Exception as e:
+                    print(f"    ⚠ 附件下载异常({e})")
+                    resume_path = ""
                 if resume_path:
                     print(f"    ✓ 附件已保存: {resume_path}")
+                    # PDF 文件直解析: 校验姓名后，取更完整的一份作为正文
+                    pdf_text = extract_pdf_text_quartz(resume_path, expected_name=name)
+                    if pdf_text and len(pdf_text) >= len(resume_content):
+                        if len(resume_content) == 0:
+                            print(f"    📄 PDF 直解析补回正文: {len(pdf_text)} 字 (AX 提取为空)")
+                        else:
+                            print(f"    📄 PDF 直解析: {len(pdf_text)} 字 (优于 AX {len(resume_content)} 字, 采用)")
+                        resume_content = pdf_text
+                    elif pdf_text:
+                        print(f"    📄 PDF 直解析 {len(pdf_text)} 字 (AX {len(resume_content)} 字更全, 保留 AX)")
 
             # 微信: 已交换→提取微信号, 可换→点换微信→确认, DB已有→跳过
             wechat_id = ""

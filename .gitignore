@@ -15,3 +15,5 @@ jobs.json
 data/backups/
 # 候选人简历（含真实 PII，不提交）
 data/resumes/
+# 候选人数据库（含真实 PII：姓名/电话/微信/简历正文，不提交；init_db() 启动时自建）
+data/candidates.db

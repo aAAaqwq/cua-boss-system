@@ -471,58 +471,48 @@ def click_contact(pid: int, window_id: int, name: str) -> tuple[bool, Optional[s
 # ══════════════════════════════════════════════════
 
 def _js_chat_history(pid: int, window_id: int) -> list[dict]:
-    """主路径(A): 用 JS 读取 DOM 聊天气泡，按 CSS class 判定角色
+    """主路径(A): 用 JS 读 DOM 对话气泡，按 BOSS 方向性 class 判定角色。
 
-    相比 AX 兜底（依赖瞬时的 送达/已读 投递标记，最新消息常因未读/刚发出而漏判），
-    DOM 气泡的方向性 class 是稳定的、与投递状态无关的角色信号。
+    BOSS 对话面板每条消息是一个带方向 class 的行：
+      - item-myself → 我方(boss)，正文在 .text 子节点(开头可能含「送达/已读」投递前缀，需剔除)
+      - item-friend → 候选人(candidate)，正文在 .text 子节点(另有空的 .figure 头像节点)
+      - item-system → 系统消息(日期分割线 / 简历请求已发送 / 在线预览提示等)
+    方向 class 是稳定的角色信号，与「送达/已读」瞬时投递标记无关，最新消息也能正确判定。
 
-    BOSS 对话气泡通常带方向性 class（item-myself / item-friend 等）。本函数尝试多种
-    选择器，取匹配最多的一组，按 class 正则判定:
-      - 含 myself/mine/self/send 等 → boss(我方)
-      - 含 friend/other/geek/receive 等 → candidate(候选人)
-    class 无法判定时回退到气泡水平位置（中心点偏右=我方）。
+    系统消息仅保留对阶段推算有意义的事件(简历/微信请求已发送)，其余噪声(日期分割线、
+    在线预览提示)丢弃。
 
-    保守策略: 仅当至少一条消息靠 class 判定成功(conf>=1)才采信，否则返回 []，
-    由 read_conversation 回退 AX 兜底，避免在未知 DOM 结构上误判。
-
-    Returns: [{"role": "boss"|"candidate", "content": str}, ...] 最近 10 条
+    Returns: [{"role": "boss"|"candidate"|"system", "content": str}, ...] 最近 10 条
     """
     r = cua("page", json.dumps({
         "pid": pid, "window_id": window_id,
         "action": "execute_javascript",
         "javascript": """
         (function(){
-            var sels = ['[class*="message-item"]','[class*="chat-item"]',
-                        '[class*="msg-item"]','[class*="message-content"]'];
-            var best=null, bestCount=0, bestSel='';
-            for (var s=0;s<sels.length;s++){
-                var nodes=document.querySelectorAll(sels[s]);
-                if (nodes.length>bestCount){bestCount=nodes.length;best=nodes;bestSel=sels[s];}
+            var rows=document.querySelectorAll(
+                '[class*="item-myself"],[class*="item-friend"],[class*="item-system"]');
+            if(!rows.length)
+                return JSON.stringify({status:'no_rows',selector:'',conf:0,messages:[]});
+            var msgs=[], conf=0;
+            for(var i=0;i<rows.length;i++){
+                var el=rows[i], cls=(el.className||'').toString(), role=null;
+                if(/item-myself/.test(cls)) role='boss';
+                else if(/item-friend/.test(cls)) role='candidate';
+                else if(/item-system/.test(cls)) role='system';
+                if(!role) continue;
+                conf++;
+                var t=el.querySelector('.text');
+                var txt=((t?t.textContent:el.textContent)||'').replace(/\\s+/g,' ').trim();
+                txt=txt.replace(/^(送达|已读|未读|已送达)\\s*/,'');
+                if(!txt) continue;
+                msgs.push({role:role, content:txt.slice(0,500)});
             }
-            if (!best || bestCount===0)
-                return JSON.stringify({status:'no_nodes',selector:'',conf:0,messages:[]});
-            var msgs=[], conf=0, winW=window.innerWidth||1200;
-            for (var i=0;i<best.length;i++){
-                var el=best[i];
-                var txt=(el.textContent||'').trim();
-                if (!txt || txt.length<2) continue;
-                var cls=((el.className||'')+' '+
-                         ((el.parentElement&&el.parentElement.className)||'')).toString();
-                var role=null;
-                if (/myself|mine|self|owner|host|send|sender/i.test(cls)){role='boss';conf++;}
-                else if (/friend|other|geek|receive|recv|candidate/i.test(cls)){role='candidate';conf++;}
-                if (!role){
-                    var rc=el.getBoundingClientRect();
-                    role=(rc.left+rc.width/2)>winW*0.55?'boss':'candidate';
-                }
-                msgs.push({role:role,content:txt.slice(0,500)});
-            }
-            return JSON.stringify({status:'ok',selector:bestSel,conf:conf,messages:msgs});
+            return JSON.stringify({status:'ok',selector:'item-direction',conf:conf,messages:msgs});
         })()
         """,
     }))
 
-    # 解析 cua-driver 返回（与 click_contact 同款多形态处理）
+    # 解析 cua-driver 返回（多形态，与 click_contact 同款处理）
     payload = None
     if isinstance(r, dict) and "status" in r and "messages" in r:
         payload = r
@@ -542,16 +532,17 @@ def _js_chat_history(pid: int, window_id: int) -> list[dict]:
 
     raw_msgs = payload.get("messages") or []
     conf = payload.get("conf") or 0
-    selector = payload.get("selector") or ""
 
-    # 保守策略: 无 class 级角色信号则放弃，回退 AX
+    # 无方向性行 → 放弃，回退 AX
     if conf < 1 or not raw_msgs:
-        if raw_msgs:
-            print(f"    ⚠ JS 提取到 {len(raw_msgs)} 条但无 class 角色信号"
-                  f"(selector={selector or '无'})，回退 AX")
         return []
 
-    # 规范化 + 去重（保序）
+    # 系统消息仅保留阶段信号(简历/微信「请求已发送」类短事件)，其余系统噪声丢弃。
+    # 模糊匹配(短文本 + 含简历/微信 + 含发送)，兼容 BOSS 文案改版，同时排除长噪声
+    # (如「您可以在线预览牛人简历…投递的简历会同时发送到您的邮箱」含简历+发送但很长)。
+    def _is_stage_signal(c: str) -> bool:
+        return len(c) <= 16 and ("简历" in c or "微信" in c) and "发送" in c
+
     seen = set()
     deduped = []
     for m in raw_msgs:
@@ -559,7 +550,11 @@ def _js_chat_history(pid: int, window_id: int) -> list[dict]:
             continue
         role = m.get("role")
         content = (m.get("content") or "").strip()
-        if role not in ("boss", "candidate") or len(content) < 2:
+        if role not in ("boss", "candidate", "system") or len(content) < 1:
+            continue
+        if role == "system" and not _is_stage_signal(content):
+            continue  # 丢弃日期分割线 / 在线预览提示等系统噪声
+        if role in ("boss", "candidate") and len(content) < 2:
             continue
         key = (role, " ".join(content.split()))
         if key in seen:
@@ -790,12 +785,19 @@ def read_conversation(pid: int, window_id: int) -> dict:
 
     if history:
         result["chat_history"] = history
-        result["last_sender"] = history[-1].get("role", "")
+        # last_sender 取最后一条「非系统」消息的角色：末尾的系统消息(简历请求已发送等)
+        # 不代表对话发言方，否则 boss 发完后紧跟系统消息会让"已回复"判断失效
+        _non_system = [m for m in history if m.get("role") in ("boss", "candidate")]
+        # 无非系统消息时留空字符串（"system" 不是合法的发言方，避免下游误判陷阱）
+        result["last_sender"] = _non_system[-1].get("role", "") if _non_system else ""
         print(f"    聊天历史: {len(history)}条 (来源={source})")
 
-        # 找到最后一条候选人消息
+        # 找到最后一条候选人消息（任何非空内容均算）。
+        # 注意: 不能用 >=4 的长度门槛——"OK/好/嗯/可以"这类极短确认是候选人真实最新回复，
+        # 旧门槛会跳过它们、误把更早的长消息当成"最新待回复"，导致回复答非所问。
+        # history 已在 _js_chat_history 层过滤系统噪声并保证 boss/candidate >=2 字。
         for msg in reversed(history):
-            if msg.get("role") == "candidate" and len(msg.get("content", "")) >= 4:
+            if msg.get("role") == "candidate" and len(msg.get("content", "").strip()) >= 1:
                 result["latest_candidate_msg"] = msg["content"]
                 break
 
@@ -832,64 +834,105 @@ def find_input_index(pid: int, window_id: int) -> Optional[int]:
     return None
 
 
-def _clear_input(pid: int, window_id: int) -> None:
-    """清空聊天输入框，模拟真实键盘操作兼容 React/Vue
+# BOSS 聊天输入框是 contenteditable 的 React 编辑器(div.boss-chat-editor-input)，
+# 不是 textarea。cua type_text / AX 写值对它静默无效(返回成功但框内为空)，
+# 必须用 execCommand('insertText') 触发编辑器原生输入处理。已实测验证(见 type_reply)。
+_EDITOR_SELECTOR = ('div.boss-chat-editor-input, [contenteditable="true"], '
+                    'textarea, [class*="chat-input"], [class*="input-box"]')
 
-    先 JS 聚焦输入框，再 Cmd+A 全选，最后 Delete 删除。
-    比直接 el.value='' 更可靠，能触发框架内部状态更新。
+
+def _editor_text(pid: int, window_id: int) -> str:
+    """回读输入框当前文本(textarea.value 或 contenteditable.textContent)，用于校验输入是否落框。"""
+    js = ("(function(){var el=document.querySelector('" + _EDITOR_SELECTOR + "');"
+          "if(!el)return JSON.stringify({found:false,value:''});"
+          "var v=(el.value!==undefined&&el.value!=='')?el.value:(el.textContent||'');"
+          "return JSON.stringify({found:true,value:v});})()")
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": window_id,
+        "action": "execute_javascript", "javascript": js,
+    }))
+    payload = r if isinstance(r, dict) and "value" in r else None
+    if payload is None:
+        raw = " ".join(str(x) for x in r) if isinstance(r, list) else \
+              str(r.get("result", r.get("text", "")) if isinstance(r, dict) else r)
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+    return payload.get("value", "") if isinstance(payload, dict) else ""
+
+
+def _type_into_editor(pid: int, window_id: int, text: str) -> bool:
+    """聚焦输入框 → 全选替换 → execCommand 插入文本，并回读校验是否真的落框。
+
+    Returns: True 仅当文本确实出现在输入框内（不再凭 cua 返回值臆断"已输入"）。
     """
-    # 聚焦输入框
+    safe = json.dumps(text)  # 转义为 JS 字符串字面量
+    js = ("(function(){var el=document.querySelector('" + _EDITOR_SELECTOR + "');"
+          "if(!el)return JSON.stringify({ok:false,landed:false,reason:'no_editor'});"
+          "el.focus();"
+          # 全选已有内容(contenteditable)或清空(textarea)，使 insertText 形成替换
+          "try{if(el.value!==undefined){el.value='';}else{var s=window.getSelection();"
+          "s.selectAllChildren(el);}}catch(e){}"
+          "var ok=document.execCommand('insertText',false," + safe + ");"
+          "el.dispatchEvent(new InputEvent('input',{bubbles:true,data:" + safe +
+          ",inputType:'insertText'}));"
+          "var v=(el.value!==undefined&&el.value!=='')?el.value:(el.textContent||'');"
+          "return JSON.stringify({ok:ok,landed:v.indexOf(" + safe + ")>=0});})()")
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": window_id,
+        "action": "execute_javascript", "javascript": js,
+    }))
+    payload = r if isinstance(r, dict) and "landed" in r else None
+    if payload is None:
+        raw = " ".join(str(x) for x in r) if isinstance(r, list) else \
+              str(r.get("result", r.get("text", "")) if isinstance(r, dict) else r)
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+    if isinstance(payload, dict):
+        return bool(payload.get("landed"))
+    # 返回值解析失败 → 直接回读确认(用前若干字符匹配，规避截断)
+    return bool(text) and text[:12] in _editor_text(pid, window_id)
+
+
+def _clear_input(pid: int, window_id: int) -> None:
+    """清空 BOSS 聊天输入框(contenteditable)。
+
+    直接 JS 清空并触发 input 事件，使 React 内部状态同步。比 Cmd+A+Delete
+    更可靠——后者依赖键盘焦点落在正确元素，对 contenteditable 常常打偏。
+    """
+    js = ("(function(){var el=document.querySelector('" + _EDITOR_SELECTOR + "');"
+          "if(!el)return'nf';el.focus();"
+          "if(el.value!==undefined){el.value='';}else{el.textContent='';}"
+          "el.dispatchEvent(new InputEvent('input',{bubbles:true,"
+          "inputType:'deleteContentBackward'}));return'ok';})()")
     cua("page", json.dumps({
         "pid": pid, "window_id": window_id,
-        "action": "execute_javascript",
-        "javascript": """
-        (function(){
-            var el = document.querySelector(
-                'textarea, [contenteditable="true"], [class*="chat-input"], [class*="input-box"]'
-            );
-            if (el) { el.focus(); return 'focused'; }
-            return 'not_found';
-        })()
-        """,
+        "action": "execute_javascript", "javascript": js,
     }))
-    time.sleep(0.2)
-    # 全选 (Cmd+A) + 删除 (Delete)
-    cua("press_key", json.dumps({"pid": pid, "window_id": window_id, "key": "a", "modifiers": ["command"]}))
-    time.sleep(0.1)
-    cua("press_key", json.dumps({"pid": pid, "window_id": window_id, "key": "delete"}))
-    time.sleep(0.2)
+    time.sleep(0.15)
 
 
 def type_reply(pid: int, window_id: int, text: str, dry_run: bool = True) -> bool:
-    """输入回复；dry_run=True 只输入不发送
+    """输入回复到 BOSS 聊天框(contenteditable)；dry_run=True 只输入不发送。
 
-    每次输入前先清空输入框（全选+删除），避免上次残留文本。
+    用 execCommand('insertText') 写入并回读校验是否真的落框——cua type_text
+    对 React contenteditable 编辑器无效会静默失败，旧实现因此报"已输入"实则空框。
+    校验失败返回 False，绝不在文本未落框时假报成功(更不会空框回车误发)。
     """
-    input_idx = find_input_index(pid, window_id)
-
-    # 清空输入框（模拟真实键盘操作）
-    _clear_input(pid, window_id)
-
-    if input_idx:
-        r = cua("type_text", json.dumps({
-            "pid": pid, "window_id": window_id,
-            "element_index": input_idx, "text": text,
-        }))
-    else:
-        r = cua("type_text", json.dumps({
-            "pid": pid, "window_id": window_id,
-            "text": text,
-        }))
-
-    if r.get("error"):
-        print(f"    ❌ 输入失败: {r['error']}")
+    landed = _type_into_editor(pid, window_id, text)
+    if not landed:
+        print("    ❌ 输入失败: 编辑器未接收文本(contenteditable insertText 失败)")
         return False
 
     if dry_run:
         return True
 
-    # 发送
+    # 发送: 回车(编辑器此时已聚焦)
     time.sleep(0.3)
+    input_idx = find_input_index(pid, window_id)
     if input_idx:
         cua("press_key", json.dumps({
             "pid": pid, "window_id": window_id,
@@ -1035,7 +1078,16 @@ def review_one_candidate(
             if job.get("title") == job_id:  # 岗位名即唯一键
                 job_templates = job.get("templates", [])
                 category_templates = job.get("category_templates", [])
-                job_context = f"{job['title']} | {job['requirements']} | {job['salary']}"
+                # 地点/薪资是短而关键的事实(约面试要用)，放在最前；requirements 可能很长，
+                # 放最后由 JOB_CONTEXT_MAX_CHARS 截断时只削要求、不丢地点。缺失字段不拼。
+                _parts = [job["title"]]
+                if job.get("location"):
+                    _parts.append(f"地点:{job['location']}")
+                if job.get("salary"):
+                    _parts.append(f"薪资:{job['salary']}")
+                if job.get("requirements"):
+                    _parts.append(f"要求:{job['requirements']}")
+                job_context = " | ".join(_parts)
                 matched_job = job
                 print(f"    岗位: {job['title']}")
                 break
@@ -1060,6 +1112,11 @@ def review_one_candidate(
     if not chat_history:
         print("    ⚠ 无聊天历史（AX+DB均为空），DeepSeek 将仅凭最新消息生成回复")
 
+    # 简历正文注入（collect 写入 candidates.resume_content），用于针对性提问
+    resume_context = ctx.get("resume_content", "")
+    if resume_context:
+        print(f"    📄 简历上下文: {len(resume_context)} 字注入")
+
     gen = generate_reply(
         latest_msg,
         templates=[],  # 旧格式兼容（jobs模式下为空）
@@ -1071,6 +1128,7 @@ def review_one_candidate(
         job_context=job_context,
         job=matched_job,
         stage_context=stage_context,
+        resume_context=resume_context,
     )
     reply = gen["reply"]
     match_layer = gen["match_layer"]
@@ -1133,6 +1191,7 @@ def _load_candidate_context(db, uid: Optional[str], name: str) -> dict:
             "wechat": str,
             "status": str,
             "db_chat_history": list[dict],
+            "resume_content": str,
         }
     """
     defaults = {
@@ -1141,15 +1200,16 @@ def _load_candidate_context(db, uid: Optional[str], name: str) -> dict:
         "wechat": "",
         "status": "new",
         "db_chat_history": [],
+        "resume_content": "",
     }
     if uid:
         row = db.execute(
-            "SELECT has_resume, has_wechat, wechat, status, chat_history FROM candidates WHERE uid = ?",
+            "SELECT has_resume, has_wechat, wechat, status, chat_history, resume_content FROM candidates WHERE uid = ?",
             (uid,),
         ).fetchone()
     else:
         row = db.execute(
-            "SELECT has_resume, has_wechat, wechat, status, chat_history FROM candidates WHERE name = ?",
+            "SELECT has_resume, has_wechat, wechat, status, chat_history, resume_content FROM candidates WHERE name = ?",
             (name,),
         ).fetchone()
     if not row:
@@ -1168,6 +1228,7 @@ def _load_candidate_context(db, uid: Optional[str], name: str) -> dict:
         "wechat": row[2] or "",
         "status": row[3] or "new",
         "db_chat_history": db_history,
+        "resume_content": row[5] or "",
     }
 
 
@@ -1261,7 +1322,9 @@ def _save_chat_history(
     """将聊天记录 upsert 到 candidates.db
 
     优先按 uid 匹配已有记录（跨脚本唯一），uid 为空时 fallback 到 name。
-    chat_history 存为 JSON 数组: [{"role":"candidate","content":"..."}, ...]
+    chat_history 存为 JSON 数组: [{"role":"candidate"|"boss"|"system","content":"..."}, ...]
+    role 可为 system（仅保留「简历/微信请求已发送」类阶段信号，供 _compute_stage 跨轮
+    读取）；下游消费方(scoring/导出等)若不需要应自行按 role 过滤。
     """
     name = result.get("name") or contact.get("name", "")
     uid = result.get("uid") or contact.get("uid")

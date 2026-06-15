@@ -23,12 +23,13 @@ from typing import Optional
 # ── DeepSeek 调用参数（集中配置，便于调优）──
 DEEPSEEK_TIMEOUT = 30            # 单次请求超时（秒）
 DEEPSEEK_MAX_TOKENS = 256        # 留足空间避免中文回复被截在半句
-DEEPSEEK_TEMPERATURE = 0.6       # 略低于 0.7，招聘话术更稳定一致
+DEEPSEEK_TEMPERATURE = 0.4       # 偏低：减少随机编造(面试官姓名/地点等幻觉)，话术更稳更克制
 API_MAX_RETRIES = 2              # 瞬时失败（网络/429/5xx）的额外重试次数
 API_RETRY_BASE_DELAY = 1.0       # 指数退避基准秒数：1s, 2s, ...
 JOB_CONTEXT_MAX_CHARS = 220      # 岗位信息注入上限，避免长 requirements 撑爆 prompt
 REPLY_MAX_CHARS = 140            # 回复软上限（系统提示词要求 ≤80 字，此为兜底裁剪）
 HISTORY_MAX_TURNS = 20           # 传给 DeepSeek 的最近对话轮数
+RESUME_CONTEXT_MAX_CHARS = 1000  # 候选人简历摘要注入上限(聊天用，比评分的4000更短，保持prompt精简)
 
 # ── 学历等级（从 filter_criteria 导入，保持向后兼容）──
 from app.filter_criteria import check_degree, DEGREE_RANK  # noqa: E402
@@ -475,12 +476,14 @@ def call_deepseek(
     job_context: str = "",
     template_hint: str = "",
     stage_context: str = "",
+    resume_context: str = "",
 ) -> tuple[Optional[str], str]:
     """调用 DeepSeek API 生成回复
 
     参数:
       template_hint: 匹配到的模板文本，作为「建议回复方向」注入 system prompt
       stage_context: 对话阶段上下文，告知 DeepSeek 当前阶段和禁忌
+      resume_context: 候选人简历正文摘要，注入 system prompt 以做针对性提问
     返回: (reply, error_msg)
     """
     cfg = _get_deepseek_config()
@@ -494,6 +497,11 @@ def call_deepseek(
         system += f"\n建议回复方向: {template_hint}"
     if stage_context:
         system += f"\n对话阶段上下文:\n{stage_context}"
+    if resume_context and resume_context.strip():
+        system += (
+            "\n\n---\n候选人简历摘要(结合它做针对性提问、推进沟通，但不要照搬原文): "
+            + _truncate(resume_context, RESUME_CONTEXT_MAX_CHARS)
+        )
 
     messages = [{"role": "system", "content": system}]
     messages.extend(_build_messages(candidate_name, candidate_message, history))
@@ -551,6 +559,7 @@ def generate_reply(
     job_context: str = "",
     job: dict = None,
     stage_context: str = "",
+    resume_context: str = "",
 ) -> dict:
     """生成回复 — 模板匹配 + DeepSeek 智能生成
 
@@ -571,6 +580,7 @@ def generate_reply(
       fallback_templates: 全局兜底模板
       job_context: 岗位描述文本 (传给 DeepSeek)
       job: 岗位字典 (含 salary/location/title 等，用于模板变量替换)
+      resume_context: 候选人简历正文摘要 (传给 DeepSeek，结合简历做针对性提问)
 
     返回:
       {
@@ -603,6 +613,7 @@ def generate_reply(
             job_context=job_context,
             template_hint=template_hint or "",
             stage_context=stage_context,
+            resume_context=resume_context,
         )
         if reply:
             return {"reply": reply, "match_layer": match_layer, "source": SOURCE_DEEPSEEK}
