@@ -16,6 +16,7 @@ cua-boss-system/
 │   ├── reply.json / reply-templates.json    # 话术模板(专属→类别→兜底 三层)
 │   ├── filter.json / filter-template.json   # 筛选条件(名校白名单+学历)
 │   ├── scoring.json / scoring-template.json # 评分维度(类别默认/岗位覆盖/权重100)
+│   ├── scoring_prompt.md     # 评分系统提示词(顶尖HR简历评分专家人设+评分准则，.md维护)
 │   └── system_prompt.md      # DeepSeek 系统提示词(HR招聘专家人设，.md维护)
 ├── scripts/
 │   ├── boss_pipeline.py        # 全流程编排(打招呼→收集→沟通，参数化，取代boss-full-pipeline skill)
@@ -310,10 +311,13 @@ score = evaluate_candidate(candidate_data={...}, job_id="全栈开发",  # job_i
 
 ### AI prompt 内容
 
-- 岗位要求（job_context）
-- 候选人信息（姓名/职位/学校/学历/简历/备注）
-- 聊天记录（最近 10 条对话）
-- 评分维度清单（名称/权重/说明）
+评分提示词分两层：
+- **system 提示词**：`config/scoring_prompt.md` —— 顶尖 HR 简历评分专家人设 + 评分准则
+  （岗位锚定 / 项目经历优先 / 证据驱动 / 警惕注水）+ 打分尺度 + 输出要求。改 .md 即时生效，
+  无需动代码（与 chat 的 `system_prompt.md` 同模式，`scoring.py` 的 `load_scoring_prompt()` 缓存读盘）。
+  文件缺失时降级为 `_FALLBACK_SCORING_PROMPT`。
+- **user 消息（动态数据）**：岗位要求（job_context，来自 jobs.json）/ 候选人信息
+  （姓名/职位/学校/学历/简历/备注）/ 聊天记录 / 评分维度清单（名称/权重/说明）/ 精确到维度 key 的 JSON 返回模板。
 
 返回 JSON: `{"dimensions": {"key": {"score": 0-10, "evidence": "..."}}, "summary": "综合评价"}`
 

@@ -147,6 +147,20 @@ _DEFAULT_GRADES = [
 ]
 _DEFAULT_LIMITS = {"resume_max_chars": 4000, "chat_max_turns": 30, "rescore_window_days": 2}
 
+# 评分系统提示词（HR 简历评分专家人设 + 评分准则 + 输出要求）维护在 .md 中，
+# 改文件即生效、无需动代码（与 chat 的 config/system_prompt.md 同模式）。
+SCORING_PROMPT_FILE = CONFIG_DIR / "scoring_prompt.md"
+
+# 兜底：.md 文件不存在时使用的最简提示词（仅作安全网，正常走 .md）
+_FALLBACK_SCORING_PROMPT = (
+    "你是一位顶尖的 HR 简历筛选与评分专家，结合岗位要求(JD)深入剖析候选人的项目经历、"
+    "量化成果与岗位匹配度。评分严谨、有区分度、拒绝凭空拔高，信息不足时给偏低分。"
+    "只返回 JSON，不要额外解释。"
+)
+
+# 模块级缓存：评分提示词只读一次盘（批量评分循环中避免反复 I/O）
+_scoring_prompt_cache: Optional[str] = None
+
 
 def grade(total: float, config: Optional[dict] = None) -> str:
     """总分 → 评级标签（如 "S 强烈推荐"）。阈值统一读 scoring.json 的 grades。
@@ -165,6 +179,21 @@ def input_limits(config: Optional[dict] = None) -> dict:
     limits = dict(_DEFAULT_LIMITS)
     limits.update((config or {}).get("input_limits") or {})
     return limits
+
+
+def load_scoring_prompt() -> str:
+    """从 config/scoring_prompt.md 加载评分系统提示词（缓存，首次读盘）。
+
+    维护 HR 评分专家人设 + 评分准则 + 输出要求，修改 .md 即时生效无需改代码。
+    文件不存在时降级为 `_FALLBACK_SCORING_PROMPT`。
+    """
+    global _scoring_prompt_cache
+    if _scoring_prompt_cache is None:
+        if SCORING_PROMPT_FILE.exists():
+            _scoring_prompt_cache = SCORING_PROMPT_FILE.read_text(encoding="utf-8").strip()
+        else:
+            _scoring_prompt_cache = _FALLBACK_SCORING_PROMPT
+    return _scoring_prompt_cache
 
 
 # ══════════════════════════════════════════════════
@@ -290,7 +319,9 @@ def _build_scoring_prompt(
         f'"{d.key}": {{"score": 7, "evidence": "理由"}}' for d in dimensions
     )
 
-    return f"""你是招聘评分专家。请根据候选人信息，对以下维度逐一打分。
+    # 人设/评分准则/输出要求统一在 config/scoring_prompt.md（system 消息）；
+    # 这里只拼装本次评分的动态数据 + 精确到维度 key 的 JSON 返回模板。
+    return f"""请结合下面的「岗位要求」与候选人的「项目经历」，对各维度逐一打分。
 
 ## 岗位要求
 {job_context or '（未提供）'}
@@ -301,12 +332,7 @@ def _build_scoring_prompt(
 ## 评分维度（每个 0-10 分）
 {dim_text}
 
-## 评分要求
-- 每个维度给 0-10 的整数分
-- 信息不足时保守估计（偏低），不要凭空猜测
-- 每维度提供 1-2 句中文打分依据
-- 提供一句话综合评价
-- 严格返回 JSON（不要 markdown 代码块包裹）:
+## 严格返回 JSON（不要 markdown 代码块包裹）
 {{"dimensions": {{ {dim_keys_str} }}, "summary": "一句话综合评价"}}"""
 
 
@@ -334,7 +360,7 @@ def _call_deepseek_scoring(
     payload = json.dumps({
         "model": cfg["model"],
         "messages": [
-            {"role": "system", "content": "你是招聘评分专家。只返回 JSON，不要额外解释。"},
+            {"role": "system", "content": load_scoring_prompt()},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
