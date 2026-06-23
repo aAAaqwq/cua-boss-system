@@ -129,9 +129,12 @@ scan_contacts() -> 逐个 review_one_candidate():
 python scripts/cua_collect.py --dry-run
 python scripts/cua_collect.py --limit 10
 python scripts/cua_collect.py --min-degree 硕士
+python scripts/cua_collect.py --no-score      # 收集后不自动评分
 ```
 
-流程: 进入聊天页 -> AX树扫描联系人 -> 逐个审查（使用 `check_candidate()` 筛选）-> 提取简历+微信 -> upsert 到 candidates.db
+流程: 进入聊天页 -> AX树扫描联系人 -> 逐个审查（使用 `check_candidate()` 筛选）-> 提取简历+微信 -> upsert 到 candidates.db -> **收集结束后对本轮有简历者实时评分并缓存**
+
+**收集后实时评分（默认开）**: Chrome 采集循环结束后，对本轮收集到、有简历正文的候选人即时调用 `evaluate_candidate_auto` 评分并 `record_score` 缓存（与 `query_db --rank` 同一路径、同一缓存字段），看排行榜时分数秒显示。best-effort：评分异常不影响采集结果。`--no-score` 可关闭（省 DeepSeek 调用）。
 
 **与 chat_loop 共享 DB**: collect 写入 `has_resume`/`has_wechat`/`uid` 等，chat_loop 读取这些字段做阶段感知。
 

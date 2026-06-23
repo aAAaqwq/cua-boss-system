@@ -919,6 +919,51 @@ def upsert(conn, data):
 
 
 # ══════════════════════════════════════════════════
+# 收集后实时评分（复用 query_db --rank 同一路径，best-effort）
+# ══════════════════════════════════════════════════
+
+def auto_score_candidates(conn, uids):
+    """对本轮刚收集、已有简历正文的候选人即时评分并缓存(record_score)。
+
+    复用 evaluate_candidate_auto（与 query_db --rank 同一条路径、同一份缓存），
+    收集完即出分，看排行榜时秒显示。best-effort：任一候选人评分异常都不影响其他人，
+    更不影响收集结果（数据已入库）。DeepSeek 未配置时各维度记 0 分并在评价里提示。
+    """
+    if not uids:
+        return
+    try:
+        from app.scoring import (load_scoring_config, build_candidate_data,
+                                 evaluate_candidate_auto)
+        from app.db import record_score
+        from app.chat_reply import load_jobs_config
+    except Exception as e:
+        print(f"  ⚠ 评分模块加载失败，跳过自动评分: {e}")
+        return
+
+    scfg = load_scoring_config()
+    jobs = load_jobs_config().get("jobs", [])
+    conn.row_factory = sqlite3.Row
+    print(f"\n⭐ 自动评分 {len(uids)} 人（刚收集且有简历，DeepSeek 判断岗位）…")
+    for i, uid in enumerate(uids, 1):
+        try:
+            row = conn.execute("SELECT * FROM candidates WHERE uid=?", (uid,)).fetchone()
+            if not row:
+                continue
+            cdata = build_candidate_data(row)
+            sc = evaluate_candidate_auto(cdata, jobs, config=scfg)
+            if sc.skipped:
+                print(f"  [{i}/{len(uids)}] {cdata['name']} → 跳过"
+                      f"（{sc.errors[0] if sc.errors else '未满足评分条件'}）")
+                continue
+            record_score(conn, uid, sc.total_score, sc.summary)
+            flag = " ⚠" if (sc.errors and sc.total_score == 0) else ""
+            print(f"  [{i}/{len(uids)}] {cdata['name']} → "
+                  f"{sc.job_id or '?'}: {sc.total_score:.1f}{flag}")
+        except Exception as e:
+            print(f"  [{i}/{len(uids)}] uid={uid} 评分异常，跳过: {e}")
+
+
+# ══════════════════════════════════════════════════
 # 入口
 # ══════════════════════════════════════════════════
 
@@ -929,6 +974,8 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--min-degree", default=DEFAULT_MIN_DEGREE, help=f"最低学历 (默认{DEFAULT_MIN_DEGREE})")
     p.add_argument("--schools", type=str)
+    p.add_argument("--no-score", action="store_true",
+                   help="收集后不自动评分(默认收集完即对有简历者实时评分并缓存)")
     args = p.parse_args()
 
     whitelist = ([s.strip() for s in args.schools.split(",")] if args.schools
@@ -981,6 +1028,7 @@ def main():
     print("\n② 开始收集...")
     conn = init_db() if not args.dry_run else None
     stats = {"collected": 0, "unsuitable": 0, "skipped": 0}
+    scored_uids = []  # 本轮收集到、有简历正文、待自动评分的 uid
 
     contacts = scan_contacts(pid, wid)
     print(f"  {len(contacts)} 个联系人")
@@ -1145,6 +1193,9 @@ def main():
             }
             if not args.dry_run: upsert(conn, data)
             stats["collected"] += 1
+            # 有 uid + 简历正文 → 纳入本轮自动评分队列(无简历者评分会跳过, 不入队)
+            if contact_uid and resume_content:
+                scored_uids.append(contact_uid)
             print(f"    ✓ 已收集")
 
         # 关掉简历预览 → Escape 关闭浮层
@@ -1154,6 +1205,9 @@ def main():
     print(f"\n{'=' * 60}")
     print(f"收集完成: ✅{stats['collected']} 🚫{stats['unsuitable']} ⏭{stats['skipped']}")
     if conn:
+        # Chrome 采集已结束 → 此时对本轮收集到的人实时评分（默认开，--no-score 关）
+        if not args.no_score:
+            auto_score_candidates(conn, scored_uids)
         count = conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
         print(f"数据库: {DB_PATH} ({count} 条)")
         conn.close()

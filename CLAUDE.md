@@ -126,9 +126,12 @@ python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
 python scripts/cua_collect.py --dry-run
 python scripts/cua_collect.py --limit 10
 python scripts/cua_collect.py --min-degree 硕士
+python scripts/cua_collect.py --no-score   # 收集后不自动评分
 ```
 
-流程: 进入聊天页 → AX树扫描联系人 → 逐个审查 → 提取uid+简历+微信 → upsert到candidates.db
+流程: 进入聊天页 → AX树扫描联系人 → 逐个审查 → 提取uid+简历+微信 → upsert到candidates.db → **采集结束后实时评分**
+
+**收集后实时评分（默认开，`--no-score` 关）**: Chrome 采集循环结束后，对本轮收集到、有简历正文的 uid 调 `auto_score_candidates()` → `evaluate_candidate_auto` + `record_score`，与 `query_db --rank` 同一路径同一缓存（score/score_summary/scored_at）。放在循环外批量做（不拖 Chrome 会话），best-effort（评分异常不影响采集与已入库数据）。看排行榜时分数已就绪，`--rank` 仍可刷新/重算。
 
 **与 chat_loop 协作**: collect 写入 `has_resume`/`has_wechat`/`uid`，chat_loop 读取做阶段感知。共享 `app/db.py` 的 `init_db()` 保证表结构一致。
 
