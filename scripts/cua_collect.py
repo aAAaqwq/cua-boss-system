@@ -313,6 +313,57 @@ def ax_click(text, pid, wid):
     return False
 
 
+def _pdf_belongs_to(path, name: str):
+    """PDF 是否属于该候选人。三态返回，专供下载文件防串档判断：
+        True  = PDF 正文确认含姓名（属于本人）
+        False = 可读 PDF 但不含姓名（疑似别人的文件）
+        None  = 无法判定（非 PDF / 图片型 PDF / Quartz 不可用）
+
+    与 extract_pdf_text_quartz 的区别：那个返回空串时无法区分「别人」和「图片PDF」，
+    这里用三态把「确认是别人」单独拎出来，让调用方能拒绝串档文件。
+    """
+    if not str(path).lower().endswith(".pdf"):
+        return None
+    try:
+        import Quartz
+        from Foundation import NSURL
+    except Exception:
+        return None  # pyobjc/Quartz 不可用 → 无法核验
+    try:
+        doc = Quartz.PDFDocument.alloc().initWithURL_(NSURL.fileURLWithPath_(str(path)))
+        if doc is None:
+            return None
+        raw = (doc.string() or "").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None  # 图片型 PDF，无正文可校验
+    if name and len(name) >= 2:
+        # 姓名整体出现，或被 PDF 排版拆字时逐字均在全文
+        return name in raw or all(c in raw for c in name)
+    return None
+
+
+def _pick_candidate_file(files: list, name: str):
+    """从新下载文件中挑出属于该候选人的那个（防串档）。
+
+    返回 (Path|None, verdict):
+      - 有文件经正文校验确认属于本人 → (该文件, "verified")
+      - 有可读 PDF 但都不含姓名     → (None, "mismatch")   调用方应跳过本地保存
+      - 全部无法判定(图片PDF/非PDF/Quartz不可用) → (第一个, "unverified")
+    """
+    readable_mismatch = False
+    for f in files:
+        verdict = _pdf_belongs_to(f, name)
+        if verdict is True:
+            return f, "verified"
+        if verdict is False:
+            readable_mismatch = True
+    if readable_mismatch:
+        return None, "mismatch"
+    return files[0], "unverified"
+
+
 def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     """从 BOSS PDF 预览中提取下载 URL 并触发浏览器下载
 
@@ -412,22 +463,30 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
         done = _completed_new_files()
         if not done:
             continue
-        src = done[0]
-        # 等待文件写入稳定
-        s2 = 0
-        for __ in range(10):
-            s1 = src.stat().st_size if src.exists() else 0
-            time.sleep(0.5)
-            s2 = src.stat().st_size if src.exists() else 0
-            if s1 == s2 and s1 > 0:
-                break
+        # 等待每个新文件写入稳定（Chrome 先落 .crdownload，完成后才重命名）
+        for f in list(done):
+            for __ in range(10):
+                s1 = f.stat().st_size if f.exists() else 0
+                time.sleep(0.5)
+                s2 = f.stat().st_size if f.exists() else 0
+                if s1 == s2 and s1 > 0:
+                    break
+        # 防串档：多个新文件(或并发下载)时按 PDF 正文姓名校验挑出属于本人的那个
+        src, verdict = _pick_candidate_file(done, name)
+        if src is None:
+            # 可读 PDF 都不含本人姓名 → 疑似别人的下载，宁可不存也不串档
+            print(f"    ⚠ 新下载文件均不含「{name}」(疑似串档), 跳过本地保存")
+            return None
+        if verdict == "unverified" and len(done) > 1:
+            print(f"    ⚠ 无法核验下载归属(图片PDF/Quartz不可用), 取最早一个")
         try:
             shutil.copy2(str(src), str(dest))
         except (FileNotFoundError, OSError) as e:
             # 拷贝失败不应中断整轮收集：简历正文已在上游提取并入库
             print(f"    ⚠ 附件拷贝失败({e}), 跳过本地保存")
             return None
-        print(f"    📥 附件下载: {dest} ({s2:,} bytes)")
+        sz = src.stat().st_size if src.exists() else 0
+        print(f"    📥 附件下载: {dest} ({sz:,} bytes)")
         return str(dest)
 
     # 策略2: 用 urllib 直连下载（可能无登录态）
@@ -444,72 +503,6 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     except Exception as e:
         print(f"    ⚠ 下载失败: {e}")
         return None
-
-
-def _fetch_pdf(url: str, name: str, filename: str = "") -> str | None:
-    """通过 HTTP 下载 PDF 到本地"""
-    RESUMES_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
-    ext = ".pdf"
-    if filename:
-        m = re.search(r'\.(\w+)$', filename)
-        if m: ext = f".{m.group(1)}"
-    dest = RESUMES_DIR / f"{safe_name}{ext}"
-
-    try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Referer": "https://www.zhipin.com/",
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            dest.write_bytes(resp.read())
-        print(f"    📥 下载成功: {dest}")
-        return str(dest)
-    except Exception as e:
-        print(f"    ⚠ 下载失败: {e}")
-        return None
-
-
-def _wait_download(name: str, filename: str = "") -> str | None:
-    """等待浏览器下载完成，在 ~/Downloads 中找最新文件拷贝到 data/resumes/"""
-    dl_dir = Path.home() / "Downloads"
-    if not dl_dir.exists():
-        return None
-
-    # 轮询等待新文件出现（最多 10s）
-    before = set(str(p) for p in dl_dir.iterdir())
-    for _ in range(10):
-        time.sleep(1)
-        after = set(str(p) for p in dl_dir.iterdir())
-        new = after - before
-        if new:
-            src = Path(list(new)[0])
-            # 等待文件写入完成
-            for __ in range(5):
-                size1 = src.stat().st_size if src.exists() else 0
-                time.sleep(0.5)
-                size2 = src.stat().st_size if src.exists() else 0
-                if size1 == size2 and size1 > 0:
-                    break
-
-            RESUMES_DIR.mkdir(parents=True, exist_ok=True)
-            safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
-            ext = src.suffix or ".pdf"
-            if filename:
-                m = re.search(r'\.(\w+)$', filename)
-                if m: ext = f".{m.group(1)}"
-            dest = RESUMES_DIR / f"{safe_name}{ext}"
-
-            # 去重: 已有同名文件则加时间戳
-            if dest.exists():
-                ts = datetime.now().strftime("%H%M%S")
-                dest = RESUMES_DIR / f"{safe_name}_{ts}{ext}"
-
-            shutil.copy2(str(src), str(dest))
-            print(f"    📥 下载成功: {dest}")
-            return str(dest)
-    return None
 
 
 # ══════════════════════════════════════════════════
