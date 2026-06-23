@@ -156,7 +156,40 @@ def cmd_rank(conn, args):
         from app.scoring import (build_candidate_data, evaluate_candidate,
                                   evaluate_candidate_auto)
         from app.chat_reply import load_jobs_config, infer_category
+        from app.pdf_util import extract_resume_from_pdf, extract_contacts
         jobs = load_jobs_config().get("jobs", [])
+
+        # ── 评分前回捞：有附件文件但正文为空者，从磁盘 PDF 二次解析补回正文 ──
+        # collect 时 AX 可能漏抽正文，但文件已落地 data/resumes/；这里补回，消除评分盲区。
+        # 文本层优先，扫描件/图片型 PDF 自动走 Vision OCR（extract_resume_from_pdf）。
+        stale = conn.execute(
+            "SELECT uid, name, resume_path FROM candidates "
+            "WHERE uid IS NOT NULL AND uid != '' "
+            "AND (resume_content IS NULL OR TRIM(resume_content) = '') "
+            "AND resume_path IS NOT NULL AND TRIM(resume_path) != ''"
+        ).fetchall()
+        recovered = 0
+        for row in stale:
+            p = Path(row["resume_path"])
+            if not p.is_absolute():
+                p = PROJECT_ROOT / row["resume_path"]
+            if not p.exists():
+                continue
+            text, _src = extract_resume_from_pdf(str(p), expected_name=row["name"] or "")
+            if not text:
+                continue
+            phone, email = extract_contacts(text)
+            conn.execute(
+                "UPDATE candidates SET resume_content = ?, has_resume = 1, "
+                "phone = CASE WHEN ? != '' THEN ? ELSE phone END, "
+                "email = CASE WHEN ? != '' THEN ? ELSE email END "
+                "WHERE uid = ?",
+                (text, phone, phone, email, email, row["uid"]),
+            )
+            recovered += 1
+        if recovered:
+            conn.commit()
+            print(f"⚙ 评分前从磁盘 PDF 回捞正文 {recovered} 人")
 
         has_uid = "uid IS NOT NULL AND uid != ''"
         not_interviewed = "(status IS NULL OR status != 'interviewed')"

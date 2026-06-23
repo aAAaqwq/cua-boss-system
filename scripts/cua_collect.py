@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
 from app.chat_reply import check_degree
 from app.db import init_db, DB_PATH
+from app.pdf_util import extract_resume_from_pdf, extract_contacts
 from scripts.boss_click_buheshi import click_buheshi
 
 SESSION = "boss-collect"
@@ -820,50 +821,7 @@ def extract_resume_text(pid, wid, expected_name: str = ""):
     return result
 
 
-def extract_pdf_text_quartz(pdf_path: str, expected_name: str = "") -> str:
-    """用 macOS 原生 Quartz/PDFKit 直接解析已下载的 PDF 文件正文。
-
-    比 BOSS 预览的 AX 树提取更可靠：读全部页、不受滚动/渲染时序/AX 截断影响，
-    是 AX 提取失败(返回空/不足)时的兜底。pyobjc 不可用或解析失败时返回 ""。
-    expected_name 用于校验 PDF 确实属于当前候选人，避免串档。
-    """
-    if not pdf_path:
-        return ""
-    try:
-        import Quartz
-        from Foundation import NSURL
-    except Exception:
-        return ""  # pyobjc/Quartz 不可用 → 优雅降级
-    try:
-        url = NSURL.fileURLWithPath_(str(pdf_path))
-        doc = Quartz.PDFDocument.alloc().initWithURL_(url)
-        if doc is None:
-            return ""
-        raw = doc.string() or ""
-    except Exception:
-        return ""
-
-    # 清洗: 去 BOSS 水印 token + 空行规整。BOSS 水印是混合大小写 base64 串、以 ~~ 收尾
-    # (如 f4c4e18f...Vq3A~~)，旧的纯小写 hex 正则漏掉，这里覆盖两种形态。
-    cleaned = []
-    for ln in raw.splitlines():
-        s = ln.strip()
-        if not s:
-            continue
-        if re.match(r'^[A-Za-z0-9_/+-]{20,}~+$', s):  # base64 水印(以波浪号收尾)
-            continue
-        if re.match(r'^[a-f0-9]{20,}~*$', s):          # 纯 hex 水印(兼容旧形态)
-            continue
-        if re.match(r'^[~\-]{1,3}$', s):                # 水印残留的孤立波浪号/横线行
-            continue
-        cleaned.append(s)
-    text = "\n".join(cleaned).strip()
-
-    # 校验归属(姓名整体出现，或被 PDF 排版拆字时逐字均在全文)
-    if expected_name and text and len(expected_name) >= 2:
-        if expected_name not in text and not all(c in text for c in expected_name):
-            return ""
-    return text
+# extract_pdf_text_quartz 已移至 app/pdf_util.py（collect 与评分回捞共用），此处 import 使用
 
 
 # ══════════════════════════════════════════════════
@@ -1116,16 +1074,17 @@ def main():
                     resume_path = ""
                 if resume_path:
                     print(f"    ✓ 附件已保存: {resume_path}")
-                    # PDF 文件直解析: 校验姓名后，取更完整的一份作为正文
-                    pdf_text = extract_pdf_text_quartz(resume_path, expected_name=name)
+                    # PDF 解析: 文本层优先, 扫描件/图片型自动 OCR; 校验姓名后取更完整的一份
+                    pdf_text, src = extract_resume_from_pdf(resume_path, expected_name=name)
+                    tag = "OCR" if src == "ocr" else "直解析"
                     if pdf_text and len(pdf_text) >= len(resume_content):
                         if len(resume_content) == 0:
-                            print(f"    📄 PDF 直解析补回正文: {len(pdf_text)} 字 (AX 提取为空)")
+                            print(f"    📄 PDF {tag}补回正文: {len(pdf_text)} 字 (AX 提取为空)")
                         else:
-                            print(f"    📄 PDF 直解析: {len(pdf_text)} 字 (优于 AX {len(resume_content)} 字, 采用)")
+                            print(f"    📄 PDF {tag}: {len(pdf_text)} 字 (优于 AX {len(resume_content)} 字, 采用)")
                         resume_content = pdf_text
                     elif pdf_text:
-                        print(f"    📄 PDF 直解析 {len(pdf_text)} 字 (AX {len(resume_content)} 字更全, 保留 AX)")
+                        print(f"    📄 PDF {tag} {len(pdf_text)} 字 (AX {len(resume_content)} 字更全, 保留 AX)")
 
             # 微信: 已交换→提取微信号, 可换→点换微信→确认, DB已有→跳过
             wechat_id = ""
@@ -1168,15 +1127,9 @@ def main():
                         wechat_requested = True
                         print(f"    → 微信: 已请求交换")
 
-            # 从简历内容中提取手机号&邮箱（不依赖标签, 直接搜模式）
-            phone = email = ""
-            if resume_content:
-                # 手机号: 11位1开头
-                pm = re.search(r'(?<!\d)(1[3-9]\d{9})(?!\d)', resume_content)
-                if pm: phone = pm.group(1)
-                # 邮箱
-                em = re.search(r'(\S+@\S+\.\S{2,})', resume_content)
-                if em: email = em.group(1).rstrip('.,;:）)')
+            # 从简历内容中提取手机号&邮箱（统一走 app.pdf_util.extract_contacts，
+            # 已修正旧正则把「邮箱：」等中文标签前缀吞进 email 的问题）
+            phone, email = extract_contacts(resume_content)
 
             data = {
                 "uid": contact_uid,
@@ -1184,7 +1137,9 @@ def main():
                 "resume_content": resume_content,
                 "resume_filename": panel.get("resume_filename", ""),
                 "resume_path": resume_path,
-                "has_resume": bool(resume_content),
+                # 有正文 或 有附件文件 都算「有简历」（文件存在但正文暂为空时也如实标记，
+                # 评分阶段会按 resume_path 二次回捞正文，见 query_db --rank）
+                "has_resume": bool(resume_content) or bool(resume_path),
                 "wechat": wechat_id, "has_wechat": wechat_requested or bool(wechat_id),
                 "phone": phone, "email": email, "status": "collected",
             }
