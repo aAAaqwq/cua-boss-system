@@ -141,14 +141,16 @@ python scripts/cua_collect.py --no-score      # 收集后不自动评分
 ### `cua_greeting_loop.py` -- 推荐页批量主动打招呼
 
 ```bash
-python scripts/cua_greeting_loop.py              # 扫描->筛选->打招呼（最多判断20人）
+python scripts/cua_greeting_loop.py              # 扫描->筛选->打招呼（打满20人为止）
 python scripts/cua_greeting_loop.py --dry-run    # 仅预览
-python scripts/cua_greeting_loop.py --limit 10   # 最多判断10人
+python scripts/cua_greeting_loop.py --limit 10   # 打招呼10人（通过筛选并成功打招呼）
 python scripts/cua_greeting_loop.py --min-degree 硕士
 python scripts/cua_greeting_loop.py --schools "清华,北大,浙大"
 ```
 
 使用 `check_candidate()` 统一筛选入口。打招呼取卡片教育经历**最后一行**（时间最早=本科），非最高学历。
+
+> **`--limit` 语义**：指**成功打招呼的人数**（通过筛选并点击成功），看过但被筛掉的卡片**不计入**。会自动多翻卡片直到打满 `--limit` 人，候选人不足时提前停止。预览模式下计「将打招呼」数。
 
 ### `cua_sync_jobs.py` -- 职位管理页职位信息同步
 

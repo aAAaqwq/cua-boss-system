@@ -51,13 +51,15 @@ cua-boss-system/
 ### cua_greeting_loop.py — 推荐页批量主动打招呼
 
 ```bash
-python scripts/cua_greeting_loop.py                  # 最多5人
+python scripts/cua_greeting_loop.py                  # 打招呼20人(默认)
 python scripts/cua_greeting_loop.py --dry-run         # 预览
-python scripts/cua_greeting_loop.py --limit 3         # 最多3人
+python scripts/cua_greeting_loop.py --limit 3         # 打招呼3人(通过筛选并成功打招呼)
 python scripts/cua_greeting_loop.py --min-degree 硕士  # 最低学历
 ```
 
 流程: 进入推荐页 → AX树扫描候选人(学校取教育经历最后一行=本科) → 学校白名单+学历筛选 → 逐个点击打招呼 → 检测上限弹窗
+
+**`--limit` = 成功打招呼人数**(非读卡片数): 循环条件 `while greeted < limit`，看过但被筛掉的卡片不计入，自动多翻卡片直到打满 limit 人(候选人耗尽则提前停)。dry-run 计「将打招呼」数避免空转。
 
 ### cua_chat_loop.py — 沟通页批量智能沟通
 
