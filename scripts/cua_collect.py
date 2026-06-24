@@ -503,8 +503,14 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
             "Referer": "https://www.zhipin.com/",
         })
         with urllib.request.urlopen(req, timeout=30) as resp:
-            dest.write_bytes(resp.read())
-        print(f"    📥 直链下载: {dest}")
+            content = resp.read()
+        # 校验确实是 PDF：无登录态时 BOSS 直链会返回 HTML 登录/错误页，
+        # 不能把这种垃圾存成 .pdf（否则后续解析/评分拿到的是登录页文字）。
+        if content[:5] != b"%PDF-":
+            print(f"    ⚠ 直链返回非PDF({len(content)}B, 疑似登录页/无登录态)，跳过保存")
+            return None
+        dest.write_bytes(content)
+        print(f"    📥 直链下载: {dest} ({len(content):,} bytes)")
         return str(dest)
     except Exception as e:
         print(f"    ⚠ 下载失败: {e}")
