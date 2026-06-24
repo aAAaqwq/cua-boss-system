@@ -9,15 +9,16 @@ cua-boss-system/
 ├── app/
 │   ├── db.py                 # 共享数据库模块(init_db / DB_PATH / schema迁移)
 │   ├── filter_criteria.py    # 名校白名单(985/211/海外) + 学校匹配 + 学历判断
-│   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测
+│   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测 + 拒绝意图识别(classify_intent/decide_rejection)
 │   └── scoring.py            # 候选人评分系统(AI多维度/岗位自动判断/按岗位自定义权重)
 ├── config/                   # template+local 双文件: -template.json提交git, 同名.json本地gitignore
 │   ├── jobs.json / jobs-template.json       # 岗位配置(cua_sync_jobs.py同步)，岗位名(title)即唯一键
-│   ├── reply.json / reply-templates.json    # 话术模板(专属→类别→兜底 三层)
+│   ├── reply.json / reply-templates.json    # 话术模板(专属→类别→兜底 三层) + rejection_policy(拒绝处理策略)
 │   ├── filter.json / filter-template.json   # 筛选条件(名校白名单+学历)
 │   ├── scoring.json / scoring-template.json # 评分维度(类别默认/岗位覆盖/权重100)
 │   ├── scoring_prompt.md     # 评分系统提示词(顶尖HR简历评分专家人设+评分准则，.md维护)
-│   └── system_prompt.md      # DeepSeek 系统提示词(HR招聘专家人设，.md维护)
+│   ├── system_prompt.md      # DeepSeek 系统提示词(HR招聘专家人设，.md维护)
+│   └── intent_prompt.md      # 拒绝意图识别提示词(明显/委婉拒绝判别+JSON输出规范，.md维护)
 ├── scripts/
 │   ├── boss_pipeline.py        # 全流程编排(打招呼→收集→沟通，参数化，取代boss-full-pipeline skill)
 │   ├── boss_click_buheshi.py   # "不合适"点击共享模块(真鼠标点图标渲染菜单→CGEvent点reason-item，isTrusted=true，不用JS点击)
@@ -97,6 +98,10 @@ python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
    ├─ g. 学校筛选               match_school() ✗ → click_buheshi()
    ├─ h. 学历筛选               check_degree() ✗ → click_buheshi()
    ├─ i. 消息检查               无候选人消息 → 跳过
+   ├─ i2.拒绝意图识别(Issue#1):  classify_intent()(DeepSeek判意图) → decide_rejection(策略)
+   │     ├─ reject_explicit 且 conf≥阈值 → click_buheshi()标'不合适' + 拒绝依据写 notes
+   │     ├─ reject_soft(委婉)         → 停止追问(不标记、不回复)  [可配置]
+   │     └─ 其它/低置信/unknown/DeepSeek不可用 → 继续正常回复(绝不误标)
    ├─ j. 智能回复:
    │     ├─ detect_job()        消息+职位 → 匹配岗位名(唯一键)
    │     ├─ 合并 DB+AX 聊天历史(去重保序, 最近20条)
@@ -121,6 +126,7 @@ python scripts/cua_chat_loop.py --schools "清华,北大" # 自定义学校
 - **系统提示词**: `config/system_prompt.md` 维护 HR 专家人设，修改即时生效
 - **输入框清空**: 模拟 Cmd+A + Delete 键盘操作，兼容 React/Vue 框架
 - **冗余兜底**: DeepSeek 回复仍问已有信息时，自动替换为阶段兜底文本
+- **拒绝识别(Issue#1)**: 回复前用 DeepSeek 判候选人意图(`config/intent_prompt.md`)。**明显拒绝**(已入职/不合适/不看机会)→ 标'不合适'；**委婉拒绝**(再看看/考虑一下)→ 默认只停止追问不标记(防误杀)。策略在 `config/reply.json` 的 `rejection_policy`(`enabled`/`min_confidence`/`soft_action: stop|mark|ignore`)。DeepSeek 不可用/不确定 → 照常回复，绝不误标。dry-run 只预览。
 
 ### cua_collect.py — 沟通页批量收集（简历+微信→SQLite）
 

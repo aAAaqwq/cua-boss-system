@@ -18,7 +18,13 @@
       {
         "id": "cat_tech_example",
         "name": "示例·问技术栈（技术岗通用）",
-        "match_keywords": ["技术栈", "框架", "语言", "微服务", "数据库"],
+        "match_keywords": [
+          "技术栈",
+          "框架",
+          "语言",
+          "微服务",
+          "数据库"
+        ],
         "reply": "我们用主流框架 + AI 工具提效，技术栈按项目选型。你最擅长哪个方向？",
         "priority": 1
       }
@@ -27,7 +33,12 @@
       {
         "id": "cat_nontech_example",
         "name": "示例·问业务方向（非技术岗通用）",
-        "match_keywords": ["业务", "方向", "职责", "负责"],
+        "match_keywords": [
+          "业务",
+          "方向",
+          "职责",
+          "负责"
+        ],
         "reply": "这个岗位主要负责{title}相关的工作，你过往哪段经历最相关？",
         "priority": 1
       }
@@ -38,14 +49,25 @@
       {
         "id": "example_greeting",
         "name": "示例·打招呼/问候",
-        "match_keywords": ["你好", "您好", "hi", "hello", "在吗"],
+        "match_keywords": [
+          "你好",
+          "您好",
+          "hi",
+          "hello",
+          "在吗"
+        ],
         "reply": "你好！看了你的简历，方便聊聊你最近做的项目和技术方向吗？",
         "priority": 1
       },
       {
         "id": "example_salary",
         "name": "示例·问薪资",
-        "match_keywords": ["薪资", "工资", "待遇", "多少钱"],
+        "match_keywords": [
+          "薪资",
+          "工资",
+          "待遇",
+          "多少钱"
+        ],
         "reply": "薪资范围 {salary}，具体看面试评估。你目前期望大概在什么区间？",
         "priority": 2
       },
@@ -62,7 +84,14 @@
     {
       "id": "fallback_greeting",
       "name": "候选人主动打招呼",
-      "match_keywords": ["你好", "您好", "hi", "hello", "在吗", "请问"],
+      "match_keywords": [
+        "你好",
+        "您好",
+        "hi",
+        "hello",
+        "在吗",
+        "请问"
+      ],
       "reply": "你好！我们在招{title}，你在做哪个方向的？聊聊看有没有契合的点～",
       "priority": 1
     },
@@ -73,5 +102,11 @@
       "reply": "收到～方便的话我们约个时间细聊？",
       "priority": 99
     }
-  ]
+  ],
+  "rejection_policy": {
+    "_doc": "拒绝意图识别(Issue#1): enabled总开关; min_confidence标记不合适的最低置信; soft_action委婉拒绝处理 stop(只停追问不标记)|mark|ignore",
+    "enabled": true,
+    "min_confidence": 0.8,
+    "soft_action": "stop"
+  }
 }

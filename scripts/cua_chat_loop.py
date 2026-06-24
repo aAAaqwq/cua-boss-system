@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school, check_candidate, check_degree, find_school
 from app.chat_reply import (
     load_jobs_config, generate_reply, detect_job, check_deepseek_configured,
+    classify_intent, decide_rejection,
     MATCH_JOB, MATCH_CATEGORY, MATCH_FALLBACK, MATCH_NONE, SOURCE_TEMPLATE,
 )
 
@@ -951,6 +952,20 @@ def type_reply(pid: int, window_id: int, text: str, dry_run: bool = True) -> boo
 # 单个候选人审查
 # ══════════════════════════════════════════════════
 
+def _note_reject(db, uid, name, reason: str) -> None:
+    """把拒绝依据写入 candidates.notes（best-effort，失败不影响主流程）。"""
+    if not db or not reason:
+        return
+    try:
+        if uid:
+            db.execute("UPDATE candidates SET notes = ? WHERE uid = ?", (reason, uid))
+        else:
+            db.execute("UPDATE candidates SET notes = ? WHERE name = ?", (reason, name))
+        db.commit()
+    except Exception:
+        pass
+
+
 def review_one_candidate(
     pid: int,
     window_id: int,
@@ -1123,6 +1138,33 @@ def review_one_candidate(
     resume_context = ctx.get("resume_content", "")
     if resume_context:
         print(f"    📄 简历上下文: {len(resume_context)} 字注入")
+
+    # g2. 拒绝意图识别 (Issue #1)：明显拒绝→标'不合适'；委婉拒绝→停止追问(不标记)。
+    #     放在生成回复之前——判为拒绝就跳过回复。DeepSeek 不可用/不确定 → 照常回复(绝不误标)。
+    policy = jobs_config.get("rejection_policy", {})
+    if policy.get("enabled", True) and check_deepseek_configured():
+        intent = classify_intent(
+            latest_msg, history=chat_history,
+            job_context=job_context, stage_context=stage_context,
+        )
+        decision = decide_rejection(intent, policy)
+        print(f"    意图: {intent['intent']}({intent['confidence']:.2f}) → {decision['action']}"
+              + (f" — {intent['reason']}" if intent.get('reason') else ""))
+        if decision["action"] == "mark":
+            print(f"    → 检测到拒绝，标记'不合适' [{decision['reason']}]")
+            if not dry_run:
+                click_buheshi(pid, window_id)
+                _note_reject(db, contact_uid, name, decision["reason"])
+            else:
+                print(f"    [预览] 将点击'不合适'(拒绝)")
+            return {"status": "unsuitable", "name": name, "uid": contact_uid,
+                    "reject_reason": decision["reason"], "job_position": job_position,
+                    "chat_history": convo.get("chat_history", [])}
+        if decision["action"] == "stop":
+            print(f"    → 委婉拒绝，停止追问(不标记、不回复) [{decision['reason']}]")
+            return {"status": "soft_reject", "name": name, "uid": contact_uid,
+                    "reject_reason": decision["reason"], "job_position": job_position,
+                    "chat_history": convo.get("chat_history", [])}
 
     gen = generate_reply(
         latest_msg,

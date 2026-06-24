@@ -99,6 +99,7 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
             return {
                 "jobs": jobs,
                 "fallback_templates": fallback,
+                "rejection_policy": tpl_data.get("rejection_policy", {}),
                 "mode": "templates",
             }
         except (json.JSONDecodeError, KeyError):
@@ -117,6 +118,7 @@ def load_jobs_config(config_path: Optional[str] = None) -> dict:
                 return {
                     "jobs": jobs,
                     "fallback_templates": _sort_templates(data.get("fallback_templates", [])),
+                    "rejection_policy": data.get("rejection_policy", {}),
                     "mode": "jobs",
                 }
         except (json.JSONDecodeError, KeyError):
@@ -530,6 +532,154 @@ def call_deepseek(
         return _trim_reply(data["choices"][0]["message"]["content"]), ""
     except (KeyError, IndexError, TypeError) as e:
         return None, f"unexpected response: {e}"
+
+
+# ══════════════════════════════════════════════════
+# 意图识别（Issue #1：拒绝识别 → 标记不合适 / 停止追问）
+# ══════════════════════════════════════════════════
+
+INTENT_PROMPT_FILE = Path(__file__).parent.parent / "config" / "intent_prompt.md"
+
+# 合法意图集合 + 兜底提示词
+_INTENT_VALUES = {"reject_explicit", "reject_soft", "interested", "neutral", "unknown"}
+_FALLBACK_INTENT_PROMPT = (
+    "你是招聘官助理。判断候选人最新消息意图，严格输出 JSON："
+    '{"intent":"reject_explicit|reject_soft|interested|neutral|unknown",'
+    '"confidence":0到1,"reason":"中文依据"}。'
+    "明显说不考虑/已入职/不合适=reject_explicit；委婉推脱(再看看/考虑一下/忙)=reject_soft；"
+    "问薪资/岗位/约时间=interested。拿不准给低 confidence 或 neutral，宁可漏判不可错杀。"
+)
+_intent_prompt_cache: Optional[str] = None
+
+
+def _load_intent_prompt() -> str:
+    """从 config/intent_prompt.md 加载意图识别提示词（缓存，首次读盘）。"""
+    global _intent_prompt_cache
+    if _intent_prompt_cache is None:
+        if INTENT_PROMPT_FILE.exists():
+            _intent_prompt_cache = INTENT_PROMPT_FILE.read_text(encoding="utf-8").strip()
+        else:
+            _intent_prompt_cache = _FALLBACK_INTENT_PROMPT
+    return _intent_prompt_cache
+
+
+def _parse_intent_json(content: str) -> dict:
+    """从 DeepSeek 返回里鲁棒解析意图 JSON。解析失败/非法 → unknown（安全降级）。"""
+    if not content:
+        return {"intent": "unknown", "confidence": 0.0, "reason": "空返回"}
+    # 容错：可能被包在 ```json ... ``` 或夹带多余文字里 → 抠出第一个 {...}
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    raw = m.group(0) if m else content
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {"intent": "unknown", "confidence": 0.0, "reason": "非JSON"}
+    if not isinstance(obj, dict):
+        return {"intent": "unknown", "confidence": 0.0, "reason": "非对象"}
+    intent = str(obj.get("intent", "")).strip()
+    if intent not in _INTENT_VALUES:
+        intent = "unknown"
+    try:
+        conf = float(obj.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+    reason = str(obj.get("reason", "")).strip()[:100]
+    return {"intent": intent, "confidence": conf, "reason": reason}
+
+
+def classify_intent(
+    candidate_message: str,
+    history: Optional[list[dict]] = None,
+    job_context: str = "",
+    stage_context: str = "",
+) -> dict:
+    """用 DeepSeek 判断候选人最新消息的意图（拒绝识别）。
+
+    返回 {"intent", "confidence", "reason"}，intent ∈ _INTENT_VALUES。
+    DeepSeek 未配置/网络失败/JSON 解析失败 → intent="unknown"（绝不误标记，安全降级）。
+
+    独立于回复生成的一次调用：放在生成回复**之前**，判为拒绝就跳过回复生成。
+    """
+    if not (candidate_message or "").strip():
+        return {"intent": "unknown", "confidence": 0.0, "reason": "无消息"}
+
+    cfg = _get_deepseek_config()
+    if not cfg["api_key"]:
+        return {"intent": "unknown", "confidence": 0.0, "reason": "DeepSeek 未配置"}
+
+    system = _load_intent_prompt()
+    if job_context:
+        system += f"\n\n当前岗位: {_truncate(job_context, JOB_CONTEXT_MAX_CHARS)}"
+    if stage_context:
+        system += f"\n对话阶段: {stage_context}"
+
+    messages = [{"role": "system", "content": system}]
+    messages.extend(_build_messages("候选人", candidate_message, history))
+
+    payload = json.dumps({
+        "model": cfg["model"],
+        "messages": messages,
+        "temperature": 0.0,           # 判定要确定性，不要随机
+        "max_tokens": 120,
+        "response_format": {"type": "json_object"},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{cfg['base_url']}/v1/chat/completions",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {cfg['api_key']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    data, err = _post_deepseek(req)
+    if data is None:
+        return {"intent": "unknown", "confidence": 0.0, "reason": f"API失败:{err}"}
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        return {"intent": "unknown", "confidence": 0.0, "reason": f"响应异常:{e}"}
+    return _parse_intent_json(content)
+
+
+# 默认拒绝处理策略（config/reply.json 的 rejection_policy 覆盖）
+DEFAULT_REJECTION_POLICY = {
+    "enabled": True,
+    "min_confidence": 0.8,      # 标记不合适所需的最低置信度
+    "soft_action": "stop",      # 委婉拒绝: stop(停止追问不标记) | mark | ignore(照常回复)
+}
+
+
+def decide_rejection(intent_result: dict, policy: Optional[dict] = None) -> dict:
+    """根据意图判定 + 策略，决定动作。纯函数，便于单测。
+
+    返回 {"action", "reason"}：
+      - "mark"  → 点「不合适」（明显拒绝；或委婉拒绝且策略=mark）
+      - "stop"  → 不标记但停止追问（委婉拒绝默认）
+      - "reply" → 照常智能回复
+    """
+    p = {**DEFAULT_REJECTION_POLICY, **(policy or {})}
+    if not p.get("enabled", True):
+        return {"action": "reply", "reason": ""}
+
+    intent = intent_result.get("intent", "unknown")
+    conf = float(intent_result.get("confidence", 0.0) or 0.0)
+    reason = intent_result.get("reason", "")
+    min_conf = float(p.get("min_confidence", 0.8))
+
+    if intent == "reject_explicit" and conf >= min_conf:
+        return {"action": "mark", "reason": f"明显拒绝: {reason}"}
+
+    if intent == "reject_soft":
+        soft = p.get("soft_action", "stop")
+        if soft == "mark" and conf >= min_conf:
+            return {"action": "mark", "reason": f"委婉拒绝: {reason}"}
+        if soft == "stop":
+            return {"action": "stop", "reason": f"委婉拒绝(暂不标记): {reason}"}
+        # soft == "ignore" → 照常回复
+
+    return {"action": "reply", "reason": ""}
 
 
 # ══════════════════════════════════════════════════

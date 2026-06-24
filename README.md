@@ -87,7 +87,9 @@ python scripts/cua_interview.py --uid <UID> --type 线上 --date 2026-06-20 --ti
 
 ### `cua_chat_loop.py` -- 沟通页批量智能沟通
 
-打开聊天页，逐个查看联系人，自动判断并执行：学校/学历筛选 -> 不合适 -> 阶段感知 -> 智能回复。
+打开聊天页，逐个查看联系人，自动判断并执行：学校/学历筛选 -> 不合适 -> **拒绝意图识别** -> 阶段感知 -> 智能回复。
+
+> **拒绝识别（Issue #1）**：回复前用 DeepSeek 判候选人最新消息意图（`config/intent_prompt.md`）。**明显拒绝**（已入职/不合适/不看机会）→ 标「不合适」+ 依据写入 `notes`；**委婉拒绝**（再看看/考虑一下）→ 默认只停止追问、不标记（防误杀，可配 `config/reply.json` 的 `rejection_policy`）；不确定/DeepSeek 不可用 → 照常回复，绝不误标。dry-run 只预览。
 
 ```bash
 python scripts/cua_chat_loop.py                   # 最多20人
@@ -474,7 +476,7 @@ cua-boss-system/
 ├── app/
 │   ├── db.py                 # 共享数据库模块(init_db / DB_PATH / schema迁移)
 │   ├── filter_criteria.py    # 统一筛选：check_candidate() + 名校白名单 + 学历等级
-│   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测
+│   ├── chat_reply.py         # 模板匹配 + DeepSeek(阶段感知+上下文合并) + 岗位检测 + 拒绝意图识别
 │   └── scoring.py            # 候选人评分系统(AI多维度/按岗位自定义权重)
 ├── config/
 │   ├── jobs.json             # 岗位配置（cua_sync_jobs.py 自动同步，提交到 git）
