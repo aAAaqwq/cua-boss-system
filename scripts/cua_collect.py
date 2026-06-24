@@ -623,6 +623,50 @@ def _wait_pdf_ready(pid, wid, timeout=45.0):
     return False  # 超时
 
 
+def _pdf_preview_present(pid, wid) -> bool:
+    """页面上是否存在可见的简历 PDF 预览 iframe（pdf-viewer / *.pdf）。"""
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript",
+        "javascript": (
+            "(function(){var f=document.querySelectorAll('iframe');"
+            "for(var i=0;i<f.length;i++){var s=f[i].src||'';var r=f[i].getBoundingClientRect();"
+            "if((s.indexOf('pdf-viewer')>=0||s.indexOf('.pdf')>=0)&&r.width>0&&r.height>0)return true;}"
+            "return false;})()"),
+    }))
+    return r is True or str(r).strip().lower() == "true"
+
+
+def close_resume_preview(pid, wid) -> bool:
+    """可靠关闭简历 PDF 预览浮层；返回 True 表示已关闭(或本就没有)。
+
+    BOSS 简历预览是 boss-dialog 模态内嵌 pdf-viewer iframe，**Escape 常关不掉该模态**。
+    若不关闭，下一个候选人点"附件简历"时 AX 树仍显示上一个人残留的 PDF → 复用同一 iframe
+    URL **反复下载同一份简历(死循环) + 串档**（实测同一文件被下 10 次、还存成了别人的名字）。
+
+    故：Escape →（仍在则）JS 点该 PDF 预览所属模态的关闭按钮(.boss-popup__close 等)，
+    每轮校验 iframe 是否消失，最多重试 3 次。关闭浮层不影响候选人状态、非反爬敏感操作，
+    用 JS 点击即可（与"不合适/打招呼/换微信"等敏感操作不同）。
+    """
+    # 注意：重复打开会在 DOM 里**叠多个** boss-dialog（实测残留 2 个 iframe），
+    # 只关"就近一个"会漏 → 每轮点掉**所有可见**的 .boss-popup__close/.icon-close 排空。
+    # 实测一轮即把 2 个 pdf 预览清到 0。
+    for _ in range(4):
+        if not _pdf_preview_present(pid, wid):
+            return True
+        cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
+        time.sleep(0.3)
+        cua("page", json.dumps({
+            "pid": pid, "window_id": wid, "action": "execute_javascript",
+            "javascript": (
+                "(function(){var n=0;"
+                "document.querySelectorAll('.boss-popup__close,.icon-close').forEach(function(c){"
+                "var r=c.getBoundingClientRect();if(r.width>0&&r.height>0){c.click();n++;}});"
+                "return n;})()"),
+        }))
+        time.sleep(0.6)
+    return not _pdf_preview_present(pid, wid)
+
+
 def click_attachment_resume(pid, wid, name=""):
     """点击附件简历并根据返回状态处理
 
@@ -649,6 +693,11 @@ def click_attachment_resume(pid, wid, name=""):
             resume_content: str
             action: "extract"|"request"|"skip"
     """
+    # 防御性关闭：先清掉上一个候选人可能残留的 PDF 预览，避免本次复用其 iframe → 串档/重复下载
+    if _pdf_preview_present(pid, wid):
+        close_resume_preview(pid, wid)
+        time.sleep(0.5)
+
     # 点击附件简历
     if not ax_click("附件简历", pid, wid):
         js_click("附件简历", pid, wid)
@@ -1226,8 +1275,8 @@ def main():
                 scored_uids.append(contact_uid)
             print(f"    ✓ 已收集")
 
-        # 关掉简历预览 → Escape 关闭浮层
-        cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
+        # 关掉简历预览（Escape 关不掉 boss-dialog → 用 close_resume_preview 点关闭按钮并校验）
+        close_resume_preview(pid, wid)
         time.sleep(1)
 
     print(f"\n{'=' * 60}")
