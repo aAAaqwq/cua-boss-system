@@ -12,7 +12,7 @@
 |------|----------|------|
 | Python | >= 3.10 | 零 pip 依赖，纯标准库 |
 | [cua-driver](https://github.com/cua-driver/cua-driver-rs) | >= 0.5.x | macOS `.app`，通过 Accessibility API 操控 Chrome |
-| Xcode Command Line Tools (swiftc) | 任意 | 首次运行自动编译 CGEvent 鼠标工具到 `/tmp/cua_hid` |
+| Xcode Command Line Tools (swiftc) | 可选 | cua-driver 自身可能需要；本项目代码不再编译 Swift 工具（点击走 cua-driver 的 CGEvent 像素点击） |
 | Google Chrome | 任意 | 需登录 BOSS直聘 |
 | DeepSeek API | -- | 智能回复（必须提前配置，未配置时降级为模板原文） |
 
@@ -184,7 +184,7 @@ python scripts/gen_reply_templates.py --all --write
 
 ### `boss_click_buheshi.py` -- "不合适"点击模块（调试/独立使用）
 
-CGEvent 原生鼠标 hover + click，绕过 BOSS 的 Vue 事件系统。已被 `cua_collect.py` 和 `cua_chat_loop.py` 作为共享模块 import 使用。
+点击走 **CGEvent 像素点击**（`isTrusted=true` 可信，避免反爬）。实测结论：BOSS 的「不合适/标为不合适/薪资不符…」都是 `AXStaticText`，**只有 showmenu/scrolltovisible 动作、没有 press** → AX press / `element_index` 点击对其**无效**（能定位但点不动）；JS `el.click()` 能点但 `isTrusted=false` 会被检测。唯一可信且有效的是 CGEvent：取元素 `getBoundingClientRect`，按 `scale=截图宽/视口宽` 换算成截图像素坐标，走 cua-driver `click {x,y}`（需窗口前台可见）。JS 仅用于 hover 展开 CSS:hover 菜单（hover 非点击）。已被 `cua_collect.py` 和 `cua_chat_loop.py` 作为共享模块 import 使用。
 
 ```bash
 python scripts/boss_click_buheshi.py    # 独立调试
@@ -475,7 +475,7 @@ cua-boss-system/
 │   └── system_prompt.md      # DeepSeek 系统提示词（HR招聘专家人设）
 ├── scripts/
 │   ├── boss_pipeline.py        # 全流程编排（打招呼->收集->沟通，参数化）
-│   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent原生鼠标）
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块（CGEvent 像素点击 isTrusted=true，不用JS点击）
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通（阶段感知+uid提取+上下文合并）
 │   ├── cua_collect.py          # 沟通页批量收集（简历+微信->SQLite）
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼

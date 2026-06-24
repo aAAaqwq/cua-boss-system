@@ -20,7 +20,7 @@ cua-boss-system/
 │   └── system_prompt.md      # DeepSeek 系统提示词(HR招聘专家人设，.md维护)
 ├── scripts/
 │   ├── boss_pipeline.py        # 全流程编排(打招呼→收集→沟通，参数化，取代boss-full-pipeline skill)
-│   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent原生鼠标)
+│   ├── boss_click_buheshi.py   # "不合适"点击共享模块(CGEvent 像素点击 isTrusted=true，不用JS点击)
 │   ├── cua_chat_loop.py        # 沟通页批量智能沟通(阶段感知+uid提取+上下文合并)
 │   ├── cua_collect.py          # 沟通页批量收集(简历+微信→SQLite)
 │   ├── cua_greeting_loop.py    # 推荐页批量主动打招呼
@@ -41,7 +41,7 @@ cua-boss-system/
 - **平台**: macOS 12+ (Monterey 及以上)，不支持 Linux/Windows
 - Python 3.10+（纯标准库）
 - `cua-driver` CLI (≥ 0.5.x)
-- `swiftc`（首次运行自动编译 CGEvent 鼠标工具 `/tmp/cua_hid`）
+- `swiftc`（可选；cua-driver 自身可能需要，本项目代码不再编译 Swift 工具，点击走 cua-driver 的 CGEvent 像素点击）
 - Chrome（需登录 BOSS直聘）
 - **Chrome 设置**: 菜单栏 → 显示 → 开发者 → ☑️ 允许来自 Apple 事件的 JavaScript
 - DeepSeek API（必须提前配置，未配置时降级为模板原文，回复质量显著下降）

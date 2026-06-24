@@ -5,12 +5,21 @@ BOSS直聘 — 点击"不合适"按钮（共享模块）
 cua_collect.py 和 cua_chat_loop.py 通过此模块统一触发"不合适"操作。
 
 流程:
-  1. AX 检测 "不合适" → 提取 element_index
-  2. JS dispatchEvent 触发 hover（mouseenter/mouseover），展开下拉面板
+  1. AX 检测 "不合适" → 确认存在
+  2. JS dispatchEvent 触发 hover（mouseenter/mouseover）展开下拉面板（仅 hover，非点击）
   3. AX 轮询等待面板展开（检测 "标为不合适" 出现），最多等 15s
-  4. cua-driver click（element_index，AX 路径，无坐标依赖）
-     → 兜底: JS el.click()
+  4. CGEvent 真鼠标点击「标为不合适」（isTrusted=true 可信）；如弹出「理由+确认」再点确认
   5. 最终 AX 验证（薪资不符/学历不符/确认）
+
+点击方式（实测结论，重要）:
+  - BOSS 的「不合适/标为不合适/薪资不符…」都是 AXStaticText，**只有 showmenu/scrolltovisible
+    动作、没有 press** → cua element_index(AX press) 点不动它们（静默失败）。AX 能"定位到"
+    但点不动，这点务必区分。
+  - JS `el.click()`/`dispatchEvent` 能点，但 `isTrusted=false`，是反爬最常用的机器人特征。
+  - 唯一「可信(isTrusted=true) 且有效」的方式是 **CGEvent 像素点击**：取元素
+    getBoundingClientRect，按 scale=截图宽/视口宽 换算成截图像素坐标，走 cua-driver
+    click {x,y}（CGEvent 路径）。实测在 BOSS 上命中、isTrusted=true。需窗口前台可见。
+  - JS 仅用于 hover 展开 CSS:hover 菜单（hover 非点击，反检测一般不针对 hover）。
 
 用法:
   from scripts.boss_click_buheshi import click_buheshi
@@ -142,7 +151,11 @@ def _find_element_index(text: str, pid: int, wid: int) -> int | None:
 # ══════════════════════════════════════════════════
 
 def _trigger_hover_js(pid: int, wid: int) -> bool:
-    """通过 JS dispatchEvent 在"不合适"按钮上触发 hover
+    """通过 JS dispatchEvent 在"不合适"按钮上触发 hover（仅 hover，非点击）
+
+    下拉菜单是 CSS:hover 触发的 web 菜单，需要鼠标悬停事件才能展开；cua-driver 没有
+    「真鼠标移动」工具，故用 JS 派发 hover 事件展开菜单。这只是 hover、不是点击——
+    真正的点击走 CGEvent 像素点击（isTrusted=true 可信路径），不受 hover 的 isTrusted 影响。
 
     BOSS 直聘使用 React，事件委托在 document root。
     dispatchEvent({bubbles: true}) 可以穿透 React 的合成事件系统。
@@ -151,22 +164,25 @@ def _trigger_hover_js(pid: int, wid: int) -> bool:
     Returns:
         True 如果 JS 执行成功（找到了元素并派发了事件）
     """
+    # 按文本「不合适」定位图标元素（比固定 .operate-icon-item[8] 索引稳健），
+    # 对它及父级链派发 hover 事件，覆盖 React 事件委托 + CSS:hover。
     js = """
 (function(){
-    var el = document.querySelectorAll(".operate-icon-item")[8];
-    if (!el) return "no_element";
-
-    // mouseenter + mouseover（兼容传统 onmouseenter/onmouseover）
-    el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true, cancelable: true}));
-    el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true, cancelable: true}));
-
-    // pointerenter（React 17+ 使用 pointer events）
-    try {
-        el.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true, cancelable: true}));
-    } catch(e) {
-        // PointerEvent 构造在某些环境不可用 → 忽略
+    var all = document.querySelectorAll('*'), icon = null;
+    for (var i = 0; i < all.length; i++) {
+        var own = '', el = all[i];
+        for (var j = 0; j < el.childNodes.length; j++)
+            if (el.childNodes[j].nodeType === 3) own += el.childNodes[j].textContent;
+        if (own.trim() === '不合适') { icon = el; break; }
     }
-
+    if (!icon) return "no_element";
+    var e = icon;
+    for (var k = 0; k < 4 && e; k++) {
+        ['mouseenter','mouseover','pointerenter','pointerover'].forEach(function(ev){
+            try { e.dispatchEvent(new MouseEvent(ev, {bubbles:true, cancelable:true})); } catch(x){}
+        });
+        e = e.parentElement;
+    }
     return "hovered";
 })()
 """
@@ -174,109 +190,176 @@ def _trigger_hover_js(pid: int, wid: int) -> bool:
     return result == "hovered"
 
 
-def _click_via_js(pid: int, wid: int) -> bool:
-    """JS click 兜底 — 在"不合适"按钮上触发 click 事件"""
-    js = """
-(function(){
-    var el = document.querySelectorAll(".operate-icon-item")[8];
-    if (!el) return "no_element";
-    el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-    // el.click() 作为兜底（触发元素默认行为 + 事件）
-    try { el.click(); } catch(e) {}
-    return "clicked";
-})()
-"""
-    result = _cua_js(js, pid, wid).strip().strip('"')
-    return result == "clicked"
+def _screenshot_dims(pid: int, wid: int) -> tuple:
+    """取窗口截图像素尺寸 (width, height)，CGEvent 坐标换算用。"""
+    st = _cua("get_window_state", json.dumps({
+        "pid": pid, "window_id": wid, "capture_mode": "screenshot",
+    }))
+    return st.get("screenshot_width"), st.get("screenshot_height")
+
+
+def _element_rect(text: str, pid: int, wid: int) -> "dict | None":
+    """JS getBoundingClientRect 取「文本完全等于 text」的元素位置 + 视口尺寸。"""
+    safe = text.replace("'", "\\'")
+    js = (
+        "(function(){var a=document.querySelectorAll('*');"
+        "for(var i=0;i<a.length;i++){var el=a[i];"
+        f"if((el.textContent||'').trim()==='{safe}'&&el.children.length<=1){{"
+        "var r=el.getBoundingClientRect();"
+        "if(r.width>0&&r.height>0)return JSON.stringify({ok:true,x:r.left,y:r.top,"
+        "w:r.width,h:r.height,iw:window.innerWidth,ih:window.innerHeight});}}"
+        "return JSON.stringify({ok:false});})()"
+    )
+    r = _cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js,
+    }))
+    if isinstance(r, str):
+        try:
+            r = json.loads(r)
+        except json.JSONDecodeError:
+            return None
+    return r if isinstance(r, dict) and r.get("ok") else None
+
+
+def _cgclick_at_rect(rect: dict, pid: int, wid: int) -> bool:
+    """把元素 rect(CSS) 换算成截图像素坐标 → cua-driver CGEvent 点击 {x,y}。
+
+    坐标换算（实测正确）：scale = 截图宽 / 视口宽；顶部浏览器 chrome = 截图高 − 视口高×scale；
+    元素中心(CSS)×scale + chrome 偏移 = 截图像素坐标。CGEvent 路径 → isTrusted=true，需窗口前台。
+    """
+    sw, sh = _screenshot_dims(pid, wid)
+    if not sw or not sh or not rect.get("iw"):
+        return False
+    scale = sw / rect["iw"]
+    chrome_top = sh - rect["ih"] * scale
+    cgx = int((rect["x"] + rect["w"] / 2) * scale)
+    cgy = int((rect["y"] + rect["h"] / 2) * scale + chrome_top)
+    r = _cua("click", json.dumps({"pid": pid, "window_id": wid, "x": cgx, "y": cgy}))
+    return not (isinstance(r, dict) and r.get("error"))
+
+
+def _cgclick_text(text: str, pid: int, wid: int) -> bool:
+    """对「文本等于 text」的可见元素做 CGEvent 真·鼠标点击（isTrusted=true，避免反爬）。
+
+    用于点击当前已可见的元素（如确认/提交按钮）。reason-item 走 _cgclick_reason（带强制展开）。
+    """
+    rect = _element_rect(text, pid, wid)
+    return _cgclick_at_rect(rect, pid, wid) if rect else False
+
+
+def _cgclick_reason(reason: str, pid: int, wid: int) -> bool:
+    """点击不合适理由项（reason-item）—— 强制展开菜单后 CGEvent 真点击（实测 5/5 稳定）。
+
+    关键：BOSS 的理由菜单是 CSS:hover 触发的 web 菜单，用 JS 派发 hover 或真鼠标点图标
+    展开都**不稳定**（实测 ~1/4 成功）。但 9 个 .reason-item 一直在 DOM 里、只是隐藏——
+    故 JS 强制把目标 reason-item 的隐藏祖先链改可见（display/visibility/opacity），取其
+    getBoundingClientRect 坐标，再 CGEvent 点击。点击仍是真鼠标 isTrusted=true（不触发反爬），
+    而"展开"只是改 CSS 可见性、不构成"点击"，不影响可信度。
+    """
+    safe = reason.replace("'", "\\'")
+    # 强制展开：把目标 reason-item 隐藏祖先链改可见，并打 data-cua-forced 标记便于事后还原
+    js = (
+        "(function(){var s=document.querySelectorAll('.reason-item'),ri=null;"
+        "for(var i=0;i<s.length;i++)if((s[i].textContent||'').trim()==="
+        f"'{safe}'){{ri=s[i];break;}}"
+        "if(!ri)return JSON.stringify({ok:false});"
+        "var e=ri;while(e&&e!==document.body){var cs=getComputedStyle(e),f=false;"
+        "if(cs.display==='none'){e.style.display='block';f=true;}"
+        "if(cs.visibility==='hidden'){e.style.visibility='visible';f=true;}"
+        "if(parseFloat(cs.opacity)===0){e.style.opacity='1';f=true;}"
+        "if(f)e.setAttribute('data-cua-forced','1');e=e.parentElement;}"
+        "var r=ri.getBoundingClientRect();"
+        "if(r.width===0||r.height===0)return JSON.stringify({ok:false});"
+        "return JSON.stringify({ok:true,x:r.left,y:r.top,w:r.width,h:r.height,"
+        "iw:window.innerWidth,ih:window.innerHeight});})()"
+    )
+    r = _cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js,
+    }))
+    if isinstance(r, str):
+        try:
+            r = json.loads(r)
+        except json.JSONDecodeError:
+            return False
+    if not (isinstance(r, dict) and r.get("ok")):
+        return False
+    ok = _cgclick_at_rect(r, pid, wid)
+
+    # 还原被强制展开元素的内联样式（避免理由菜单残留可见）
+    _cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript",
+        "javascript": (
+            "(function(){var a=document.querySelectorAll('[data-cua-forced]');"
+            "for(var i=0;i<a.length;i++){a[i].style.display='';a[i].style.visibility='';"
+            "a[i].style.opacity='';a[i].removeAttribute('data-cua-forced');}return 'cleaned';})()"
+        ),
+    }))
+    return ok
 
 
 # ══════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════
 
-def click_buheshi(pid: int, wid: int, verbose: bool = True) -> bool:
+def click_buheshi(pid: int, wid: int, verbose: bool = True, reason: str = "其他原因") -> bool:
     """点击 BOSS 直聘聊天页右侧面板的"不合适"按钮
 
     流程:
-      Step 1: AX 检测 "不合适" + 提取 element_index
-      Step 2: JS dispatchEvent 触发 hover，展开下拉面板
-      Step 3: AX 轮询等待面板展开（检测 "标为不合适"），最多等 15s
-      Step 4: cua-driver click（element_index AX 路径）→ 兜底 JS click
-      Step 5: 最终 AX 验证
+      Step 1: AX 检测 "不合适" 存在（确认已选中候选人、有该操作）
+      Step 2: 强制展开理由菜单 + CGEvent 像素点击 reason-item（默认「其他原因」，isTrusted=true），带重试
+      Step 3: 若弹出确认/提交 → CGEvent 点确认
+      Step 4: 最终 AX 验证
+
+    关键（实测）：理由菜单是 CSS:hover 触发的 web 菜单，靠 hover 展开**不稳定**(~1/4)；
+    但 9 个 .reason-item 一直在 DOM 里只是隐藏 → 改为「JS 强制展开 + CGEvent 点击」实测 5/5。
+    「标为不合适」只是标题(DIV.title)点不动；真正可点的是 .reason-item，点它才会真标记。
 
     Args:
         pid: Chrome 进程 ID
         wid: BOSS 直聘窗口 ID
         verbose: 是否打印步骤日志
+        reason: 标记不合适时选的理由（菜单 reason-item 文本），默认"其他原因"
 
     Returns:
         True 成功 / False 失败
     """
-    # ── Step 1: AX 检测 + 提取 element_index ──
+    # ── Step 1: AX 检测 "不合适" 是否存在 ──
     if verbose:
-        _log("INFO", "Step 1/3: AX 检测 '不合适' + 提取 element_index...")
+        _log("INFO", "Step 1/3: AX 检测 '不合适'...")
 
     if not _ax_has_text("不合适", pid, wid):
         if verbose:
             _log("WARN", "未检测到 '不合适' — 无需操作")
         return False
 
-    element_idx = _find_element_index("不合适", pid, wid)
+    # ── Step 2: 强制展开理由菜单 + CGEvent 点击 reason-item（带重试，实测 5/5）──
     if verbose:
-        if element_idx is not None:
-            _log("OK", f"element_index={element_idx}")
-        else:
-            _log("WARN", "未找到 element_index，将使用 JS click 兜底")
-
-    # ── Step 2: JS 触发 hover → 展开下拉面板 ──
-    if verbose:
-        _log("INFO", "Step 2/3: JS 触发 hover → 等待面板展开...")
-
-    _trigger_hover_js(pid, wid)
-
-    # ── Step 3: AX 轮询等待 "标为不合适" 出现 ──
-    waited = 0
-    max_wait = 30  # 0.5s × 30 = 15s
-    while waited < max_wait:
-        if _ax_has_text("标为不合适", pid, wid):
-            if verbose:
-                _log("OK", f"面板已展开 (等待 {waited * 0.5:.0f}s)")
-            break
-        time.sleep(0.5)
-        waited += 1
-
-    if waited >= max_wait:
-        if verbose:
-            _log("WARN", "等待超时，面板未展开 — 仍然尝试点击")
-
-    # ── Step 4: 点击 ──
-    if verbose:
-        _log("INFO", "Step 3/3: 点击 '不合适'...")
+        _log("INFO", f"Step 2/3: 强制展开菜单 + CGEvent 点击理由 '{reason}'...")
 
     clicked = False
-    if element_idx is not None:
-        r = _cua("click", json.dumps({
-            "pid": pid, "window_id": wid, "element_index": element_idx,
-        }))
-        if not r or r.get("error"):
-            if verbose:
-                _log("WARN", f"AX click 失败: {r.get('error', 'unknown')} → 尝试 JS click")
-        else:
+    for _ in range(3):
+        if _cgclick_reason(reason, pid, wid):
             clicked = True
-            if verbose:
-                _log("OK", "AX click 完成")
-
+            break
+        time.sleep(0.5)
     if not clicked:
-        if _click_via_js(pid, wid):
-            clicked = True
-            if verbose:
-                _log("OK", "JS click 完成")
-        else:
-            if verbose:
-                _log("ERROR", "JS click 也失败 — 无法定位按钮")
-
-    if not clicked:
+        if verbose:
+            _log("ERROR", f"点击'{reason}'失败 — 未找到 reason-item 或窗口非前台")
         return False
+    if verbose:
+        _log("OK", f"CGEvent 点击'{reason}'完成 (isTrusted=true 可信)")
+
+    # 若弹出「确认/提交」对话 → CGEvent 点确认(限定上下文, 避免误点页面其它'确认')
+    time.sleep(0.8)
+    confirm_tree = _cua("get_window_state", json.dumps({
+        "pid": pid, "window_id": wid, "capture_mode": "ax", "query": "确认",
+    })).get("tree_markdown", "")
+    if ("确认" in confirm_tree or "提交" in confirm_tree) and ("不合适" in confirm_tree or "原因" in confirm_tree):
+        for btn in ("确认", "提交"):
+            if btn in confirm_tree and _cgclick_text(btn, pid, wid):
+                if verbose:
+                    _log("OK", f"CGEvent 点击'{btn}'完成")
+                break
 
     # ── Step 5: 最终验证 ──
     time.sleep(0.5)
