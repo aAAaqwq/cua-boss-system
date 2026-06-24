@@ -382,27 +382,32 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid,
         "action": "execute_javascript",
+        # 关键：只取**当前可见**的 PDF 预览 iframe。
+        # BOSS 关闭简历预览后会把 iframe 留在 DOM 里(隐藏, 0 尺寸); 若不判可见性,
+        # 下一个候选人会**首先匹配到上一个人残留的隐藏 iframe** → 反复下载同一份简历(死循环)。
+        # 故先按 src 收集候选, 再用 getBoundingClientRect 过滤掉不可见的, 取可见的。
         "javascript": """
         JSON.stringify((function(){
+            function visible(el){var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}
             var iframes = document.querySelectorAll('iframe');
             for (var i = 0; i < iframes.length; i++) {
+                if (!visible(iframes[i])) continue;   // 跳过隐藏/残留的预览 iframe
                 var src = iframes[i].src || '';
                 var m = src.match(/bzl-office\\/pdf-viewer-b\\?url=([^&]+)/);
                 if (m) {
                     var decoded = decodeURIComponent(m[1]);
                     return {url: 'https://www.zhipin.com' + decoded, source: 'iframe'};
                 }
-                // 也检查直接嵌入的 PDF
                 m = src.match(/\\.pdf(\\?|$)/);
                 if (m) return {url: src, source: 'iframe-direct'};
             }
-            // 回退: embed/object 元素
             var embeds = document.querySelectorAll('embed[src*=".pdf"], object[data*=".pdf"]');
             for (var j = 0; j < embeds.length; j++) {
+                if (!visible(embeds[j])) continue;
                 var u = embeds[j].src || embeds[j].getAttribute('data') || '';
                 if (u) return {url: u, source: 'embed'};
             }
-            return {url: null};
+            return {url: null};   // 无可见预览 → 不下载(候选人没附件简历, 或预览已关闭)
         })())
         """,
     }))
