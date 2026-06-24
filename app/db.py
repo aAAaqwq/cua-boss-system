@@ -70,11 +70,63 @@ END;
 """
 
 
+def _canonical_types() -> dict:
+    """从 _SCHEMA 取标准列类型（name -> declared type），借内存库解析，单一事实来源。"""
+    mem = sqlite3.connect(":memory:")
+    mem.execute(_SCHEMA)
+    types = {r[1]: r[2] for r in mem.execute("PRAGMA table_info(candidates)")}
+    mem.close()
+    return types
+
+
+def _normalize_schema(conn: sqlite3.Connection) -> bool:
+    """把已存在的 candidates 表列类型对齐标准 _SCHEMA（仅在类型声明不符时整表重建）。
+
+    背景：老库迁移时 `_PATCH_COLUMNS` 用 `ALTER ADD COLUMN ... TEXT` 补列，使
+    scored_at/updated_at/interview_at 声明成 TEXT、score 为 INTEGER，与全新建库
+    (_SCHEMA 的 TIMESTAMP/REAL) 不一致。SQLite 改列类型只能整表重建。
+
+    安全：先 `backup_db` 备份 → 事务内重建(rename→建标准表→搬数据→校验行数→删旧表)，
+    行数不一致即回滚抛错。列类型本因 SQLite 动态类型不影响功能，这里只为「声明与代码一致」。
+    返回 True=执行了重建；False=本就一致，未改动。
+    """
+    want = _canonical_types()
+    have = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(candidates)")}
+    mismatch = {c: (have[c], want[c]) for c in want if c in have and have[c] != want[c]}
+    if not mismatch:
+        return False
+
+    conn.commit()  # 落盘待提交的补列，使备份/重建基于一致状态
+    backup_db("before-schema-normalize")
+
+    shared = [c for c in want if c in have]  # 共有列，按标准顺序搬运
+    collist = ", ".join(shared)
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP TRIGGER IF EXISTS trg_candidates_touch")
+        conn.execute("ALTER TABLE candidates RENAME TO _candidates_legacy")
+        conn.execute(_SCHEMA)  # 建标准表（正确类型）
+        n_old = conn.execute("SELECT COUNT(*) FROM _candidates_legacy").fetchone()[0]
+        conn.execute(
+            f"INSERT INTO candidates ({collist}) SELECT {collist} FROM _candidates_legacy"
+        )
+        n_new = conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
+        if n_new != n_old:
+            raise RuntimeError(f"schema 归一化行数不一致 old={n_old} new={n_new}")
+        conn.execute("DROP TABLE _candidates_legacy")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return True
+
+
 def init_db() -> sqlite3.Connection:
     """初始化 candidates.db，返回已连接的 sqlite3.Connection。
 
     - 表不存在 → 按完整 schema 创建
     - 表已存在但缺列 → ALTER TABLE 补齐
+    - 表已存在但列类型与标准不符（老库迁移产物）→ 自动备份后整表重建对齐
     - uid 唯一索引不存在 → 创建
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +139,10 @@ def init_db() -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} TEXT")
         except sqlite3.OperationalError:
             pass  # 列已存在
+
+    # 列类型对齐标准 _SCHEMA（仅老库类型不符时重建，已自动备份）
+    if _normalize_schema(conn):
+        print(f"  ✓ candidates 表列类型已对齐标准 schema（原库已备份至 {BACKUP_DIR}）")
 
     # uid 唯一索引
     try:
