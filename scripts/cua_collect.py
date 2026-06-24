@@ -672,6 +672,23 @@ def close_resume_preview(pid, wid) -> bool:
     return not _pdf_preview_present(pid, wid)
 
 
+def _read_wechat_for(name: str, tree: str) -> str:
+    """从 AX 树里读「{name}的微信号：xxx」——**必须匹配当前候选人姓名**。
+
+    BOSS 聊天页 AX 树会同时包含多个候选人的微信交换消息(如"游荣亮的微信号：wxid_..."、
+    "许平的微信号：anykcryXu")。原代码取**第一个**'微信号'行、不认人 → 把别人的微信号
+    写给当前候选人(串档, 实测同一号码串到 4 个人)。按姓名前缀匹配即可各取各的。
+    """
+    if not name:
+        return ""
+    for line in tree.split('\n'):
+        if f'{name}的微信号' in line:
+            m = re.search(r'的微信号[:：]\s*([^\s"\]]+)', line)
+            if m:
+                return m.group(1).strip()
+    return ""
+
+
 def click_attachment_resume(pid, wid, name=""):
     """点击附件简历并根据返回状态处理
 
@@ -1235,21 +1252,16 @@ def main():
 
             if not wechat_requested:
                 tree = ax_tree(pid, wid)
-                # 已交换: 点"查看微信"→读微信号
-                if "查看微信" in tree:
+                # 已交换: 直接按姓名从聊天里读「{name}的微信号：xxx」(自带姓名, 不串档)
+                wechat_id = _read_wechat_for(name, tree)
+                # 没读到但有"查看微信"按钮 → 点开再按姓名读一次
+                if not wechat_id and "查看微信" in tree:
                     js_click("查看微信", pid, wid); time.sleep(1)
-                    tree2 = ax_tree(pid, wid)
-                    for line in tree2.split('\n'):
-                        if '微信号' in line and 'AXHeading' in line:
-                            m = re.search(r'"([^"]+)"', line)
-                            if m:
-                                parts = m.group(1).split('：')
-                                if len(parts) > 1:
-                                    wechat_id = parts[-1].strip()
-                                    wechat_requested = True
-                                    print(f"    → 微信: {wechat_id}")
-                                    break
-                # 未交换: 点"换微信"→确认
+                    wechat_id = _read_wechat_for(name, ax_tree(pid, wid))
+                if wechat_id:
+                    wechat_requested = True
+                    print(f"    → 微信: {wechat_id}")
+                # 未交换: 点"换微信"→确认 (请求交换)
                 elif "换微信" in tree:
                     js_click("换微信", pid, wid); time.sleep(1.5)
                     if "确定与对方交换微信" in ax_tree(pid, wid):
