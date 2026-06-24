@@ -1412,7 +1412,10 @@ def main():
   %(prog)s --min-degree 硕士         最低硕士
         """,
     )
-    parser.add_argument("--limit", type=int, default=20, help="最多处理N个未读 (默认20)")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="从聊天联系人列表【顶部往下审查的联系人个数】(前 N 个，"
+                             "含被学校/学历筛掉、已回复/无消息跳过的，都计入)，默认 20。"
+                             "注意：这是'审查前N个联系人'，不是'回复N个人'")
     parser.add_argument("--dry-run", action="store_true", help="仅预览: 输入回复但不发送，不点不合适")
     parser.add_argument("--schools", type=str, default=None, help="学校白名单，逗号分隔 (默认ALL_ELITE_SCHOOLS)")
     parser.add_argument("--min-degree", type=str, default=DEFAULT_MIN_DEGREE, help=f"最低学历要求 (默认{DEFAULT_MIN_DEGREE})")

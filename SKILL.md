@@ -37,7 +37,7 @@
 | 4 | **同步岗位信息** | `python scripts/cua_sync_jobs.py --write` |
 | 5 | **配置专属话术 + 评分细则**（先查看现有配置，**如有必要**再引导用户调整） | 查看 `config/reply.json`、`config/scoring.json`；按需 `python scripts/gen_reply_templates.py --all --write` 生成话术，编辑 `scoring.json` 调权重 |
 | 6 | **配置筛选模板**（先查看现有筛选配置，**如有必要**再引导调整） | 查看 `config/filter.json`；按需 `cp config/filter-template.json config/filter.json` 后编辑学校白名单 / 最低学历 |
-| 7 | **运行 boss-pipeline**：打招呼 20 → 收集 5 → 沟通 5 | `python scripts/boss_pipeline.py --greet 20 --collect 5 --chat 5` |
+| 7 | **运行 boss-pipeline**：打招呼 20 → 收集前 20 → 沟通前 20（默认值，可省略参数） | `python scripts/boss_pipeline.py`（等价 `--greet 20 --collect 20 --chat 20`）。**语义**：greet=成功打招呼人数；collect/chat=联系人列表顶部前 N 个逐个处理(含被筛掉/跳过的) |
 | 8 | **看排行榜**：询问筛选评分口径，展示最近 2 天排行榜前 10，**排除已面试过的** | `python scripts/query_db.py --rank --days 2 --top 10` |
 | 9 | **预约面试**：与用户确认线上/线下 + 具体时间，再预约 | `python scripts/cua_interview.py --uid <UID> --type 线上 --date 2026-06-20 --time 14:30` |
 | 10 | **设为定时任务**（可选） | boss-pipeline 每天 8/15/21 点；面试提醒 每天 6 点。见 [references/cli.md](references/cli.md)「定时任务部署」 |

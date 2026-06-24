@@ -982,7 +982,10 @@ def auto_score_candidates(conn, uids):
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--limit", type=int, default=20,
+                   help="从聊天联系人列表【顶部往下处理的联系人个数】(前 N 个，"
+                        "含被学校/学历筛掉、无简历跳过的，都计入)，默认 20。"
+                        "注意：这是'处理前N个联系人'，不是'收集到N份简历'")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--min-degree", default=DEFAULT_MIN_DEGREE, help=f"最低学历 (默认{DEFAULT_MIN_DEGREE})")
     p.add_argument("--schools", type=str)

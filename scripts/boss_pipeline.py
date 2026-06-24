@@ -49,11 +49,14 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--greet", type=int, default=20,
-                   help="打招呼人数上限，默认 20(设大如 100 可打到每日上限)")
-    p.add_argument("--collect", type=int, default=5,
-                   help="收集简历+微信人数，默认 5")
-    p.add_argument("--chat", type=int, default=5,
-                   help="智能沟通人数，默认 5")
+                   help="打招呼步骤的 --limit：成功打招呼的人数(非读卡片数)，"
+                        "不符合筛选的会自动跳过并多翻卡片直到打满，默认 20(设大如 100 可打到每日上限)")
+    p.add_argument("--collect", type=int, default=20,
+                   help="收集步骤的 --limit：从聊天联系人列表【顶部往下处理的联系人个数】"
+                        "(含被筛掉/无简历跳过的，按列表顺序前 N 个)，默认 20")
+    p.add_argument("--chat", type=int, default=20,
+                   help="沟通步骤的 --limit：从聊天联系人列表【顶部往下审查的联系人个数】"
+                        "(含被筛掉/已回复/跳过的，按列表顺序前 N 个)，默认 20")
     p.add_argument("--min-degree", help="最低学历(本科/硕士/博士)，传给各步骤")
     p.add_argument("--schools", help="学校白名单(逗号分隔)，传给打招呼/沟通步骤")
     p.add_argument("--dry-run", action="store_true", help="全程预览，不实际操作")
