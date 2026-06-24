@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school, check_candidate, check_degree
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school, check_candidate, check_degree, find_school
 from app.chat_reply import (
     load_jobs_config, generate_reply, detect_job, check_deepseek_configured,
     MATCH_JOB, MATCH_CATEGORY, MATCH_FALLBACK, MATCH_NONE, SOURCE_TEMPLATE,
@@ -1038,16 +1038,23 @@ def review_one_candidate(
                 return {"status": "already_replied", "name": name, "uid": contact_uid, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
 
     # d. 学校筛选
-    school_ok = school and match_school(school, school_whitelist)
+    # 学校识别：先用 find_school 在信息行做白名单整词反查（解决「（北京）/分校/科学技术院」
+    # 被窄正则截断而漏配的误杀），命中取规范白名单名；否则退回 read 到的 school。
+    school_resolved = find_school(
+        f"{convo.get('info_line', '')} {school or ''}", school_whitelist) or school
 
-    if not school_ok:
-        school_str = school or "未知"
-        print(f"    → 学校不符 ({school_str} 不在白名单)，标记'不合适'")
+    # 学校没读到（面板未识别）→ 绝不误点"不合适"，跳过等下一轮
+    if not school_resolved:
+        print(f"    → ⚠ 学校未识别(面板未读到)，跳过(不点'不合适')")
+        return {"status": "skipped_no_school", "name": name, "uid": contact_uid, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
+
+    if not match_school(school_resolved, school_whitelist):
+        print(f"    → 学校不符 ({school_resolved} 不在白名单)，标记'不合适'")
         if not dry_run:
             click_buheshi(pid, window_id)
         else:
             print(f"    [预览] 将点击'不合适'")
-        return {"status": "unsuitable", "name": name, "uid": contact_uid, "school": school_str, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
+        return {"status": "unsuitable", "name": name, "uid": contact_uid, "school": school_resolved, "job_position": job_position, "chat_history": convo.get("chat_history", [])}
 
     # e. 学历筛选
     if degree and not check_degree(degree, min_degree):

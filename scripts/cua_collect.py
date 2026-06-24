@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school
+from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_school, find_school
 from app.chat_reply import check_degree
 from app.db import init_db, DB_PATH
 from app.pdf_util import extract_resume_from_pdf, extract_contacts
@@ -510,31 +510,34 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
 # 面板读取
 # ══════════════════════════════════════════════════
 
-def read_panel(pid, wid):
-    """读右侧对话面板: name, school, degree, job"""
+def read_panel(pid, wid, whitelist=None):
+    """读右侧对话面板: name, school, degree, job
+
+    学校识别：先收集面板里含学校的文本（"·"信息行 + 含「大学/学院」的短文本），
+    用 find_school 做白名单整词反查（解决「（北京）/分校/科学技术院」被窄正则截断而漏配
+    的误杀），命中即取规范白名单名；未命中再退化窄正则提取（用于展示/非白名单候选人）。
+    """
     tree = ax_tree(pid, wid)
     result: dict = {"name": "", "school": "", "degree": "", "job": "",
               "has_attachment": False, "resume_filename": ""}
+    school_blob = []  # 可能含学校的文本片段，供白名单反查
 
     for line in tree.split("\n"):
-        # 学校
-        m = re.search(r'AXStaticText\s*=\s*"([一-龥]{2,8}(?:大学|学院|学校))"', line)
-        if m and not result["school"]: result["school"] = m.group(1)
-
         # 学历
         m = re.search(r'AXStaticText\s*=\s*"(博士|硕士|本科|大专)"', line)
         if m and not result["degree"]: result["degree"] = m.group(1)
 
-        # "·" 分隔信息行 → job
-        m = re.search(r'AXStaticText\s*=\s*"(.+)"', line)
-        if m and "·" in m.group(1) and len(m.group(1)) < 80:
-            parts = [p.strip() for p in m.group(1).split("·")]
-            for p in parts:
-                school_m = re.match(r'^([一-龥]{2,8}(?:大学|学院|学校))$', p)
-                if school_m and not result["school"]: result["school"] = school_m.group(1)
-                if p in ("博士","硕士","本科","大专") and not result["degree"]:
-                    result["degree"] = p
-            if not result["job"]: result["job"] = m.group(1)
+        m = re.search(r'AXStaticText\s*=\s*"(.+?)"', line)
+        if m:
+            val = m.group(1)
+            if "·" in val and len(val) < 80:                 # 候选人信息行
+                school_blob.append(val)
+                for p in (x.strip() for x in val.split("·")):
+                    if p in ("博士", "硕士", "本科", "大专") and not result["degree"]:
+                        result["degree"] = p
+                if not result["job"]: result["job"] = val
+            elif any(s in val for s in ("大学", "学院", "学校", "研究院")) and len(val) < 30:
+                school_blob.append(val)                       # 独立学校文本
 
         # 附件简历: AXLink=对方已发 / AXWebArea PDF=已打开预览
         idx_m = re.search(r'\[(\d+)\]', line)
@@ -546,6 +549,15 @@ def read_panel(pid, wid):
         if idx_m and 250 <= int(idx_m.group(1)) <= 760:
             m = re.search(r'(?:AXStaticText|AXHeading)\s*=\s*"([^"]+\.(?:docx?|pdf|doc))"', line)
             if m: result["resume_filename"] = m.group(1)
+
+    # 学校：白名单整词反查优先（规范名，含括号/分校），未命中退化窄正则（展示用）
+    blob = " ".join(school_blob)
+    hit = find_school(blob, whitelist) if whitelist else ""
+    if hit:
+        result["school"] = hit
+    else:
+        m = re.search(r'([一-龥]{2,8}(?:大学|学院|学校))', blob)
+        if m: result["school"] = m.group(1)
 
     return result
 
@@ -1062,10 +1074,23 @@ def main():
             print(f"    uid: {contact_uid}")
         time.sleep(2)  # 等右侧面板加载
 
-        panel = read_panel(pid, wid)
+        panel = read_panel(pid, wid, whitelist)
         school = panel["school"] or ""
+        # 学校没读到 → 面板可能没加载好：再等久点重读一次，仍空则跳过(绝不误点"不合适")
+        if not school:
+            time.sleep(2)
+            panel = read_panel(pid, wid, whitelist)
+            school = panel["school"] or ""
         degree = panel["degree"] or ""
         job = panel["job"] or contact.get("job", "")
+
+        # 学校识别失败兜底：宁可漏放也不误杀好候选人 → 跳过(不点不合适)
+        if not school:
+            print(f"    → ⚠ 学校未识别(面板未读到)，跳过不处理(不点'不合适')")
+            stats["skipped"] += 1
+            cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
+            time.sleep(1)
+            continue
 
         ok = "✅" if match_school(school, whitelist) else "❌"
         print(f"    学校: {school or '?'} {ok}  学历: {degree or '?'}  岗位: {job}")

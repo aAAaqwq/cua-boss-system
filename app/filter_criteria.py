@@ -214,6 +214,48 @@ def match_school(candidate_school: str, whitelist: list) -> bool:
     return False
 
 
+def _is_cjk(ch: str) -> bool:
+    return bool(ch) and "一" <= ch <= "鿿"
+
+
+def find_school(text: str, whitelist: list = None) -> str:
+    """在面板文本里反查白名单学校（整词/前缀锚定），返回命中的白名单校名(canonical)。
+
+    解决 read_panel 窄正则把「（北京）/分校」等后缀截断导致漏配的问题：直接拿白名单
+    校名去文本里找，命中即返回其规范名（再走 match_school 自然相等）。规则：
+
+    - **前缀锚定**：命中位置前一个字符不能是汉字 → 避免「电子科技大学」被
+      「桂林电子科技大学」的尾部误配（前面是「林」即拒绝）。
+    - **独立学院护栏**：若命中的白名单校以「大学」结尾、且其后紧跟汉字并很快出现
+      「学院」(如「电子科技大学成都学院」) → 判为同名独立学院、非该 985，跳过。
+    - 允许「医学部/本部/校区/分校」等校区后缀（如「北京大学医学部」仍算北大）。
+    - 多个命中取最长(最具体)的白名单名。
+    """
+    if not text:
+        return ""
+    if whitelist is None:
+        whitelist = ALL_ELITE_SCHOOLS
+    best = ""
+    for w in whitelist:
+        ws = (w or "").strip()
+        if not ws or len(ws) <= len(best):
+            continue
+        start = 0
+        while True:
+            i = text.find(ws, start)
+            if i < 0:
+                break
+            before = text[i - 1] if i > 0 else ""
+            tail = text[i + len(ws): i + len(ws) + 6]
+            independent = (ws.endswith("大学") and tail and _is_cjk(tail[0])
+                           and "学院" in tail)  # X大学Y学院 独立学院
+            if not _is_cjk(before) and not independent:
+                best = ws
+                break
+            start = i + 1
+    return best
+
+
 # ══════════════════════════════════════════════════
 # 统一筛选入口 — 所有脚本共用
 # ══════════════════════════════════════════════════
