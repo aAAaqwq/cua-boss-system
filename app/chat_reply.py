@@ -676,7 +676,7 @@ def decide_rejection(intent_result: dict, policy: Optional[dict] = None) -> dict
         soft = p.get("soft_action", "stop")
         if soft == "mark" and conf >= min_conf:
             return {"action": "mark", "reason": f"委婉拒绝: {reason}"}
-        if soft == "stop":
+        if soft == "stop" and conf >= min_conf:
             return {"action": "stop", "reason": f"委婉拒绝(暂不标记): {reason}"}
         # soft == "ignore" → 照常回复
 

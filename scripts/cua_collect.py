@@ -167,11 +167,12 @@ def scan_contacts(pid, wid):
     if cur_name:
         contacts.append({"name": cur_name, "job": cur_job or "", "time": cur_time or "", "idx": cur_idx})
 
-    # 去重 (同名只保留第一个)
+    # 去重 (同名+同岗位只保留第一个；同名不同岗位的候选人不丢弃)
     seen, unique = set(), []
     for c in contacts:
-        if c["name"] not in seen:
-            seen.add(c["name"])
+        key = (c["name"], c.get("job", ""))
+        if key not in seen:
+            seen.add(key)
             unique.append(c)
     return unique
 
@@ -351,8 +352,10 @@ def _pick_candidate_file(files: list, name: str):
     返回 (Path|None, verdict):
       - 有文件经正文校验确认属于本人 → (该文件, "verified")
       - 有可读 PDF 但都不含姓名     → (None, "mismatch")   调用方应跳过本地保存
-      - 全部无法判定(图片PDF/非PDF/Quartz不可用) → (第一个, "unverified")
+      - 全部无法判定(图片PDF/非PDF/Quartz不可用) → (最新一个, "unverified")
+      - 全部过小(疑似限流 JSON)     → (None, "too_small")  调用方应跳过本地保存
     """
+    MIN_FILE_SIZE = 1024  # 限流 JSON 仅几十字节，按此阈值剔除
     readable_mismatch = False
     for f in files:
         verdict = _pdf_belongs_to(f, name)
@@ -362,7 +365,22 @@ def _pick_candidate_file(files: list, name: str):
             readable_mismatch = True
     if readable_mismatch:
         return None, "mismatch"
-    return files[0], "unverified"
+    # 无法核验：按修改时间倒序(最新优先)挑，跳过过小文件(疑似限流 JSON)
+    def _size(f):
+        try:
+            return f.stat().st_size
+        except OSError:
+            return 0
+    def _mtime(f):
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0.0
+    big_enough = [f for f in files if _size(f) >= MIN_FILE_SIZE]
+    if not big_enough:
+        return None, "too_small"
+    big_enough.sort(key=_mtime, reverse=True)
+    return big_enough[0], "unverified"
 
 
 def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
@@ -480,11 +498,26 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
         # 防串档：多个新文件(或并发下载)时按 PDF 正文姓名校验挑出属于本人的那个
         src, verdict = _pick_candidate_file(done, name)
         if src is None:
-            # 可读 PDF 都不含本人姓名 → 疑似别人的下载，宁可不存也不串档
-            print(f"    ⚠ 新下载文件均不含「{name}」(疑似串档), 跳过本地保存")
+            if verdict == "too_small":
+                # 新下载文件均过小 → 疑似 BOSS 限流 JSON，宁可不存也不污染评分
+                print(f"    ⚠ 下载文件均过小(疑似限流), 跳过本地保存")
+            else:
+                # 可读 PDF 都不含本人姓名 → 疑似别人的下载，宁可不存也不串档
+                print(f"    ⚠ 新下载文件均不含「{name}」(疑似串档), 跳过本地保存")
             return None
         if verdict == "unverified" and len(done) > 1:
-            print(f"    ⚠ 无法核验下载归属(图片PDF/Quartz不可用), 取最早一个")
+            print(f"    ⚠ 无法核验下载归属(图片PDF/Quartz不可用), 取最新一个")
+        # 拷贝前再核验 src：限流 JSON 可能被存成 .pdf，按 PDF 魔术字节 + 体积兜底拦截
+        try:
+            with open(src, "rb") as fh:
+                head = fh.read(5)
+            src_size = src.stat().st_size
+        except OSError as e:
+            print(f"    ⚠ 附件读取失败({e}), 跳过本地保存")
+            return None
+        if head != b"%PDF-" or src_size < 1024:
+            print(f"    ⚠ 下载文件非PDF/过小(疑似限流), 跳过保存")
+            return None
         try:
             shutil.copy2(str(src), str(dest))
         except (FileNotFoundError, OSError) as e:
@@ -493,6 +526,7 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
             return None
         sz = src.stat().st_size if src.exists() else 0
         print(f"    📥 附件下载: {dest} ({sz:,} bytes)")
+        time.sleep(random.uniform(3, 6))  # 下载节流，规避 BOSS 限流
         return str(dest)
 
     # 策略2: 用 urllib 直连下载（可能无登录态）
@@ -511,6 +545,7 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
             return None
         dest.write_bytes(content)
         print(f"    📥 直链下载: {dest} ({len(content):,} bytes)")
+        time.sleep(random.uniform(3, 6))  # 下载节流，规避 BOSS 限流
         return str(dest)
     except Exception as e:
         print(f"    ⚠ 下载失败: {e}")

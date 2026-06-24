@@ -8,6 +8,8 @@
 """
 import json
 import os
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +18,10 @@ from typing import Optional
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 DEFAULT_SCORING_CONFIG = CONFIG_DIR / "scoring.json"
 SCORING_TEMPLATE = CONFIG_DIR / "scoring-template.json"
+
+# ── DeepSeek 瞬时失败重试（与 chat_reply._post_deepseek 同模式）──
+API_MAX_RETRIES = 2          # 额外重试次数（网络/429/5xx）
+API_RETRY_BASE_DELAY = 1.0   # 指数退避基准秒数：1s, 2s, ...
 
 
 # ══════════════════════════════════════════════════
@@ -364,7 +370,7 @@ def _call_deepseek_scoring(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 1200,
+        "max_tokens": 2600,  # 4维度×中文依据+总结的JSON易超长；1200会被截断成非法JSON→评分失败
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -377,22 +383,36 @@ def _call_deepseek_scoring(
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+    # 带指数退避重试：网络错误/429/5xx **以及评分 JSON 被截断/非法**都重试。
+    # （DeepSeek 偶发返回被截断的不完整 JSON——HTTP 200 但 content 不完整，不是网络错，
+    #   故把内容 JSON 解析也放进重试循环，否则截断一次就永久评分失败。）
+    last_err = ""
+    result = None
+    raw_text = ""
+    for attempt in range(API_MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
             raw_text = data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        errors.append(f"DeepSeek API 调用失败: {e}")
-        return {}, "", errors
+            txt = raw_text
+            if txt.startswith("```"):  # 去掉 markdown 代码块包裹
+                lines = txt.split("\n")
+                txt = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            result = json.loads(txt)   # 模型评分 JSON；截断→JSONDecodeError→重试
+            break
+        except urllib.error.HTTPError as e:
+            last_err = f"HTTP {e.code}"
+            if e.code != 429 and 400 <= e.code < 500:  # 4xx(非429)不可重试
+                break
+        except json.JSONDecodeError:
+            last_err = f"返回非JSON(疑似截断): {raw_text[:120]}"
+        except Exception as e:  # noqa: BLE001 — 网络层异常统一重试
+            last_err = str(e)
+        if attempt < API_MAX_RETRIES:
+            time.sleep(API_RETRY_BASE_DELAY * (2 ** attempt))
 
-    # 解析 JSON（处理 markdown 包裹）
-    try:
-        if raw_text.startswith("```"):
-            lines = raw_text.split("\n")
-            raw_text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        result = json.loads(raw_text)
-    except json.JSONDecodeError:
-        errors.append(f"DeepSeek 返回非 JSON: {raw_text[:200]}")
+    if result is None:
+        errors.append(f"DeepSeek 评分失败: {last_err}")
         return {}, "", errors
 
     # 提取各维度分数
@@ -401,9 +421,14 @@ def _call_deepseek_scoring(
     for key in dim_keys:
         entry = dim_results.get(key, {})
         if isinstance(entry, dict) and "score" in entry:
-            raw = max(0, min(10, int(entry["score"])))
+            try:
+                raw = max(0.0, min(10.0, float(entry["score"])))
+            except (ValueError, TypeError):
+                scores[key] = (0.0, "AI 返回的该维度分数非法")
+                errors.append(f"维度 '{key}' 分数非法: {entry.get('score')!r}")
+                continue
             evidence = entry.get("evidence", "")
-            scores[key] = (float(raw), evidence)
+            scores[key] = (raw, evidence)
         else:
             scores[key] = (0.0, "AI 未返回该维度分数")
             errors.append(f"维度 '{key}' 未在 AI 响应中找到")

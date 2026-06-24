@@ -15,7 +15,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-DB_PATH = PROJECT_ROOT / "data" / "candidates.db"
+from app.db import DB_PATH, init_db  # noqa: E402 — 共用统一 DB 路径 + 表结构迁移
 
 _DEGREE_ORDER = {"博士": 4, "硕士": 3, "本科": 2, "大专": 1}
 
@@ -175,6 +175,18 @@ def cmd_rank(conn, args):
                 p = PROJECT_ROOT / row["resume_path"]
             if not p.exists():
                 continue
+            # 校验是真 PDF：限流 JSON 等垃圾文件曾被存成 .pdf（如 71 字节）
+            try:
+                if p.stat().st_size < 1024:
+                    print(f"  ⚠ 跳过疑似垃圾简历文件(过小): {p.name}")
+                    continue
+                with open(p, "rb") as fh:
+                    if fh.read(5) != b"%PDF-":
+                        print(f"  ⚠ 跳过非 PDF 文件: {p.name}")
+                        continue
+            except OSError as e:
+                print(f"  ⚠ 读取简历文件失败({e}): {p.name}")
+                continue
             text, _src = extract_resume_from_pdf(str(p), expected_name=row["name"] or "")
             if not text:
                 continue
@@ -234,10 +246,15 @@ def cmd_rank(conn, args):
                 print(f"  [{i}/{len(to_score)}] {cdata['name']} → 跳过: "
                       f"{sc.errors[0] if sc.errors else '未满足评分条件'}")
                 continue
+            # 评分失败（DeepSeek 缺 key/429/超时/非 JSON）不写分，避免把 0 分缓存成
+            # 粘性结果（scored_at 写入后再也不会重评）——保持未评分，下次重试
+            if sc.errors:
+                print(f"  ⚠ 评分失败(将下次重试): {cdata['name']}"
+                      f"（{sc.errors[0]}）")
+                continue
             record_score(conn, cdata["uid"], sc.total_score, sc.summary)
-            flag = " ⚠" if (sc.errors and sc.total_score == 0) else ""
             print(f"  [{i}/{len(to_score)}] {cdata['name']} → {sc.job_id or '?'}: "
-                  f"{sc.total_score:.1f}{flag}")
+                  f"{sc.total_score:.1f}")
 
         # 无 uid 的未评分候选人无法缓存，提示数量
         no_uid = conn.execute(
@@ -304,6 +321,7 @@ def main():
     p.add_argument("--category", help="强制指定类别 tech/nontech(评分维度)")
     args = p.parse_args()
 
+    init_db()  # 确保表结构/迁移就绪，避免对未迁移 DB 查询时报错
     conn = get_conn()
 
     if args.rank:

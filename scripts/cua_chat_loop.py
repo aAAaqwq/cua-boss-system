@@ -739,41 +739,50 @@ def read_conversation(pid: int, window_id: int) -> dict:
     tree = snap.get("tree_markdown", "")
 
     if tree:
-        for line in tree.split("\n"):
+        tree_lines = tree.split("\n")
+
+        # job_position 在整棵树里取首个「沟通的职位」分割线（不限于右侧面板，保持原行为）
+        for line in tree_lines:
+            if result["job_position"]:
+                break
+            jm = re.search(r'沟通的职位[-－—:：]\s*(.+?)\s*"', line.strip())
+            if jm:
+                pos = jm.group(1).strip()
+                if pos and len(pos) <= 30:
+                    result["job_position"] = pos
+
+        # 学校/学历/info_line 是右侧面板的候选人资料：它出现在聊天历史(「X月X日 沟通的职位」
+        # 日期分割线)**之前**，且是最靠近分割线的那条——右面板资料在 AX 树里排在左侧联系人列表
+        # 之后。故在「分割线之前」的区域里取**最后一个**匹配(last-wins)：既避开聊天消息里的学校
+        # 提及，又跳过左侧列表里别人的残留。找不到分割线则回退全树并同样取最后匹配(安全降级)。
+        anchor = -1
+        for i, line in enumerate(tree_lines):
+            if re.search(r'\d+月\d+日\s+沟通的职位', line):
+                anchor = i
+        header_lines = tree_lines[:anchor] if anchor >= 0 else tree_lines
+
+        for line in header_lines:
             s = line.strip()
-            # 沟通岗位 (右侧面板日期分割线: "6月3日 沟通的职位-开发")
-            # 这是 BOSS 招聘岗位名（与 jobs 配置 key 对齐），权威来源，优先于左侧列表
-            if not result["job_position"]:
-                jm = re.search(r'沟通的职位[-－—:：]\s*(.+?)\s*"', s)
-                if jm:
-                    pos = jm.group(1).strip()
-                    if pos and len(pos) <= 30:
-                        result["job_position"] = pos
-            # 学校 (独立出现)
+            # 学校 (独立出现) —— last-wins，越靠后越可能是右面板资料
             m = re.search(r'AXStaticText\s*=\s*"([一-龥]{2,8}(?:大学|学院|学校))"', s)
-            if m and not result["school"]:
+            if m:
                 result["school"] = m.group(1)
             # 学历 (独立出现)
             m = re.search(r'AXStaticText\s*=\s*"(博士|硕士|本科|大专)"', s)
-            if m and not result["degree"]:
+            if m:
                 result["degree"] = m.group(1)
             # 候选人信息行: "郑州大学 · 经济统计学 · 本科" 或 "某 · 技术总监"
             m = re.search(r'AXStaticText\s*=\s*"(.+)"', s)
             if m and "·" in m.group(1) and len(m.group(1)) < 80:
                 info = m.group(1)
-                # 解析 · 分隔的字段
                 parts = [p.strip() for p in info.split("·")]
-                # 尝试从各部分中提取学校和学历
                 for p in parts:
-                    # 学校
                     school_m = re.match(r'^([一-龥]{2,8}(?:大学|学院|学校))$', p)
-                    if school_m and not result["school"]:
+                    if school_m:
                         result["school"] = school_m.group(1)
-                    # 学历
-                    if p in ("博士", "硕士", "本科", "大专") and not result["degree"]:
+                    if p in ("博士", "硕士", "本科", "大专"):
                         result["degree"] = p
-                if not result["info_line"]:
-                    result["info_line"] = info
+                result["info_line"] = info
 
     # ── 2. 读取聊天历史 ──
     # 主路径(A): JS 读 DOM 气泡按 class 判定角色（不依赖瞬时投递标记，最新消息也能正确判断）
@@ -1111,8 +1120,8 @@ def review_one_candidate(
     jobs = jobs_config.get("jobs", [])
     fallback_tpls = jobs_config.get("fallback_templates", [])
 
-    # 检测候选人对应的岗位
-    job_id = detect_job(latest_msg, contact.get("job", ""), jobs)
+    # 检测候选人对应的岗位（用权威招聘岗位 job_position，而非候选人本人职位 contact["job"]）
+    job_id = detect_job(latest_msg, job_position, jobs)
     job_templates = []
     category_templates = []
     job_context = ""
@@ -1184,14 +1193,20 @@ def review_one_candidate(
                 _note_reject(db, contact_uid, name, decision["reason"])
             else:
                 print(f"    [预览] 将点击'不合适'(拒绝)")
-            return {"status": "unsuitable", "name": name, "uid": contact_uid,
-                    "reject_reason": decision["reason"], "job_position": job_position,
-                    "chat_history": convo.get("chat_history", [])}
+            res = {"status": "unsuitable", "name": name, "uid": contact_uid,
+                   "reject_reason": decision["reason"], "job_position": job_position}
+            # dry-run 是预览，绝不写库：省略 chat_history 让主循环的保存守卫跳过
+            if not dry_run:
+                res["chat_history"] = convo.get("chat_history", [])
+            return res
         if decision["action"] == "stop":
             print(f"    → 委婉拒绝，停止追问(不标记、不回复) [{decision['reason']}]")
-            return {"status": "soft_reject", "name": name, "uid": contact_uid,
-                    "reject_reason": decision["reason"], "job_position": job_position,
-                    "chat_history": convo.get("chat_history", [])}
+            res = {"status": "soft_reject", "name": name, "uid": contact_uid,
+                   "reject_reason": decision["reason"], "job_position": job_position}
+            # dry-run 是预览，绝不写库：省略 chat_history 让主循环的保存守卫跳过
+            if not dry_run:
+                res["chat_history"] = convo.get("chat_history", [])
+            return res
 
     gen = generate_reply(
         latest_msg,

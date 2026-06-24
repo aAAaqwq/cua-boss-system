@@ -63,6 +63,11 @@ class TestDecideRejection(unittest.TestCase):
         d = decide_rejection({"intent": "reject_soft", "confidence": 0.9, "reason": "再看看"})
         self.assertEqual(d["action"], "stop")
 
+    def test_soft_low_conf_replies(self):
+        # 委婉拒绝置信度低于阈值 → 不应静默停止(ghost)，照常回复(防误杀可能有意向的候选人)
+        d = decide_rejection({"intent": "reject_soft", "confidence": 0.3, "reason": "再看看"})
+        self.assertEqual(d["action"], "reply")
+
     def test_soft_can_be_configured_to_mark(self):
         d = decide_rejection(
             {"intent": "reject_soft", "confidence": 0.9, "reason": "考虑下"},
