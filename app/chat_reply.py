@@ -501,7 +501,8 @@ def call_deepseek(
         system += f"\n对话阶段上下文:\n{stage_context}"
     if resume_context and resume_context.strip():
         system += (
-            "\n\n---\n候选人简历摘要(结合它做针对性提问、推进沟通，但不要照搬原文): "
+            "\n\n---\n候选人背景资料(可能来自简历附件，或在线资料+候选人自己在聊天里的自述；"
+            "结合其中的具体技术栈/项目/年限做针对性提问、推进沟通，但不要照搬原文，也不要编造其中没有的事实): "
             + _truncate(resume_context, RESUME_CONTEXT_MAX_CHARS)
         )
 

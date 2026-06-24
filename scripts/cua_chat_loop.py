@@ -952,6 +952,28 @@ def type_reply(pid: int, window_id: int, text: str, dry_run: bool = True) -> boo
 # 单个候选人审查
 # ══════════════════════════════════════════════════
 
+def _build_candidate_background(info_line: str, chat_history: list) -> str:
+    """没有简历附件时，用「在线资料 + 候选人自述」拼一个背景上下文，供 DeepSeek 做针对性提问。
+
+    候选人开场自我介绍往往很具体（技术栈/项目/年限），且这些信息天然在聊天里；但对话变长后
+    早期自述会被 HISTORY_MAX_TURNS 截断丢失。把它单独抽出来作为持久背景，确保 AI 始终看得到、
+    不至于在没简历时只能空泛地问"说说你的经历"。
+    """
+    bits = []
+    info = (info_line or "").strip()
+    if info:
+        bits.append(f"在线资料: {info}")
+    # 候选人自己说过的有信息量的话（自我介绍/背景），取较长的前 3 条
+    selfintro = [
+        (m.get("content") or "").strip()
+        for m in (chat_history or [])
+        if m.get("role") == "candidate" and len((m.get("content") or "").strip()) >= 15
+    ]
+    if selfintro:
+        bits.append("候选人自述: " + " / ".join(selfintro[:3]))
+    return "\n".join(bits)
+
+
 def _note_reject(db, uid, name, reason: str) -> None:
     """把拒绝依据写入 candidates.notes（best-effort，失败不影响主流程）。"""
     if not db or not reason:
@@ -1134,10 +1156,15 @@ def review_one_candidate(
     if not chat_history:
         print("    ⚠ 无聊天历史（AX+DB均为空），DeepSeek 将仅凭最新消息生成回复")
 
-    # 简历正文注入（collect 写入 candidates.resume_content），用于针对性提问
+    # 背景上下文注入，用于针对性提问。优先用简历正文(collect 写入 resume_content)；
+    # 没简历时回退到「在线资料 + 候选人自述」——避免无简历就空泛提问(Issue: 优化无简历对话)。
     resume_context = ctx.get("resume_content", "")
+    bg_source = "简历正文"
+    if not resume_context:
+        resume_context = _build_candidate_background(convo.get("info_line", ""), chat_history)
+        bg_source = "在线资料+自述"
     if resume_context:
-        print(f"    📄 简历上下文: {len(resume_context)} 字注入")
+        print(f"    📄 背景上下文({bg_source}): {len(resume_context)} 字注入")
 
     # g2. 拒绝意图识别 (Issue #1)：明显拒绝→标'不合适'；委婉拒绝→停止追问(不标记)。
     #     放在生成回复之前——判为拒绝就跳过回复。DeepSeek 不可用/不确定 → 照常回复(绝不误标)。
@@ -1318,7 +1345,7 @@ def _compute_stage(ctx: dict, chat_history: list[dict]) -> tuple[str, str]:
     elif has_wechat and not has_resume:
         stage = "has_wechat_no_resume"
         known = [f"已交换微信(微信号: {wechat_id})" if wechat_id else "已交换微信"]
-        hint = "已交换微信，不要再问微信。可以聊岗位具体细节或直接约面试。"
+        hint = "已交换微信，不要再问微信。结合候选人自述/在线资料针对性追问其技术栈/项目/年限细节，或聊岗位细节、约面试；没简历也不要干等对方发。"
     else:
         # 无 DB 数据，检查历史中的请求信号
         extras = []
