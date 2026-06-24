@@ -6,9 +6,9 @@ cua-driver 驱动的 BOSS直聘打招呼
 逐个遍历候选人卡片 → 提取学校/学历 → 筛选判断 → 打招呼 → 检测上限
 
 用法:
-  python scripts/cua_greeting_loop.py              # 扫描→筛选→打招呼(最多判断20人)
+  python scripts/cua_greeting_loop.py              # 扫描→筛选→打招呼(打满20人为止)
   python scripts/cua_greeting_loop.py --dry-run    # 仅预览
-  python scripts/cua_greeting_loop.py --limit 10   # 最多判断10人
+  python scripts/cua_greeting_loop.py --limit 10   # 打招呼10人(通过筛选并成功打招呼)
   python scripts/cua_greeting_loop.py --schools "清华,北大,浙大"  # 自定义学校
 """
 import argparse, json, random, subprocess, sys, time, re
@@ -450,7 +450,7 @@ def process_candidates(
     page_round = 1
     empty_rounds = 0  # 连续无新候选人计数，防无限刷新
 
-    while judged < limit:
+    while greeted < limit:
         # ── 每次循环都获取最新 AX 树 ──
         snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": wid}))
         tree = snap.get("tree_markdown", "")
@@ -506,7 +506,8 @@ def process_candidates(
         passed, fail_reason = check_candidate(school, degree, school_whitelist, target_degree)
         status = "✅" if passed else "  "
 
-        print(f"  [{judged:>3}/{limit}] {status} {name:10s} | {school:16s} | {degree:4s}"
+        # 进度按「已打招呼/目标」展示（judged=看过的卡片数，不是打招呼数）
+        print(f"  [打{greeted}/{limit} 看{judged}] {status} {name:10s} | {school:16s} | {degree:4s}"
               + (f" | {fail_reason}" if fail_reason else ""))
 
         if not passed:
@@ -518,6 +519,9 @@ def process_candidates(
             continue
 
         if dry_run:
+            # 预览不实际点击，但计入「将打招呼」数，使 limit 表示打招呼人数
+            greeted += 1
+            print(f"         [预览] 将打招呼 (idx={idx})")
             continue
 
         # ── 打招呼间隔 ──
@@ -542,7 +546,7 @@ def process_candidates(
         time.sleep(random.uniform(1.5, 3))
 
     else:
-        stop_reason = f"达到判断上限 ({limit})"
+        stop_reason = f"已达打招呼目标 ({limit} 人)"
 
     return (greeted, judged, stop_reason)
 
@@ -553,7 +557,9 @@ def process_candidates(
 
 def main():
     parser = argparse.ArgumentParser(description="cua-driver 驱动 BOSS直聘打招呼")
-    parser.add_argument("--limit", type=int, default=20, help="最多判断候选人卡片数 (默认20)")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="打招呼人数上限：通过筛选并成功打招呼的人数 (默认20)；"
+                             "看过的卡片数不计入，候选人不足时提前停止")
     parser.add_argument("--dry-run", action="store_true", help="仅预览, 不实际打招呼")
     parser.add_argument("--schools", type=str, help="自定义学校白名单, 逗号分隔")
     parser.add_argument("--min-degree", type=str, default=DEFAULT_MIN_DEGREE, help=f"最低学历 (默认{DEFAULT_MIN_DEGREE})")
