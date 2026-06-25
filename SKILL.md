@@ -40,7 +40,7 @@
 | 7 | **运行 boss-pipeline**：打招呼 20 → 收集前 20 → 沟通前 20（默认值，可省略参数） | `python scripts/boss_pipeline.py`（等价 `--greet 20 --collect 20 --chat 20`）。**语义**：greet=成功打招呼人数；collect/chat=联系人列表顶部前 N 个逐个处理(含被筛掉/跳过的) |
 | 8 | **看排行榜**：询问筛选评分口径，展示最近 2 天排行榜前 10，**排除已面试过的** | `python scripts/query_db.py --rank --days 2 --top 10` |
 | 9 | **预约面试**：与用户确认线上/线下 + 具体时间，再预约 | `python scripts/cua_interview.py --uid <UID> --type 线上 --date 2026-06-20 --time 14:30` |
-| 10 | **设为定时任务**（可选） | boss-pipeline 每天 8/15/21 点；面试提醒 每天 6 点。见 [references/cli.md](references/cli.md)「定时任务部署」 |
+|| 10 | **设为定时任务**（可选） | `python scripts/setup_cron.py install` — 每天 9:30 自动跑全流程。详见 [references/cli.md](references/cli.md)「定时任务部署」 |
 
 > **说明**：第 8 步的排行榜会对窗口内尚未评分的候选人**懒调用 DeepSeek 评分并缓存到 DB**（`score`/`scored_at`），重复运行不会重复扣费；`--rescore` 可强制重算。第 9 步预约成功后会把面试写回 DB（`status=interviewed`），从而被第 8 步自动排除、并被面试提醒读取。
 
