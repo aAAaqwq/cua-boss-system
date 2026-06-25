@@ -41,7 +41,7 @@ _LAYER_LABEL = {
     MATCH_NONE: "✗未命中",
 }
 from app.db import DB_PATH
-from scripts.boss_click_buheshi import click_buheshi
+from scripts.boss_click_buheshi import click_buheshi, _activate_chrome_front
 
 SESSION_ID = "boss-chat"
 CHROME_BUNDLE_ID = "com.google.Chrome"
@@ -940,7 +940,9 @@ def type_reply(pid: int, window_id: int, text: str, dry_run: bool = True) -> boo
     if dry_run:
         return True
 
-    # 发送: 回车(编辑器此时已聚焦)
+    # 发送: 回车。键盘事件只送达**前台窗口**，故发送前先激活 Chrome 到前台，
+    # 否则后台跑时回车打空、消息输入了却发不出去(与 cmd+R 同理)。
+    _activate_chrome_front()
     time.sleep(0.3)
     input_idx = find_input_index(pid, window_id)
     if input_idx:

@@ -24,7 +24,7 @@ from app.filter_criteria import ALL_ELITE_SCHOOLS, DEFAULT_MIN_DEGREE, match_sch
 from app.chat_reply import check_degree
 from app.db import init_db, DB_PATH
 from app.pdf_util import extract_resume_from_pdf, extract_contacts
-from scripts.boss_click_buheshi import click_buheshi
+from scripts.boss_click_buheshi import click_buheshi, _activate_chrome_front
 
 SESSION = "boss-collect"
 CHROME = "com.google.Chrome"
@@ -696,6 +696,9 @@ def close_resume_preview(pid, wid) -> bool:
     # 注意：重复打开会在 DOM 里**叠多个** boss-dialog（实测残留 2 个 iframe），
     # 只关"就近一个"会漏 → 每轮点掉**所有可见**的 .boss-popup__close/.icon-close 排空。
     # 实测一轮即把 2 个 pdf 预览清到 0。
+    # Escape 是键盘事件，只送达前台窗口 → 后台跑时打空。先激活 Chrome 到前台再按 Esc，
+    # JS 点关闭按钮作为不依赖前台的兜底(两者并用最稳)。
+    _activate_chrome_front()
     for _ in range(4):
         if not _pdf_preview_present(pid, wid):
             return True
