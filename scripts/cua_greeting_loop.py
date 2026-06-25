@@ -345,8 +345,19 @@ def _parse_candidates_from_tree(tree: str) -> list[dict]:
 
 
 def _refresh_page(pid: int, wid: int):
-    """刷新推荐页并等待加载（宽松模式）"""
+    """刷新推荐页并等待加载（宽松模式）
+
+    关键：cmd+R 必须送达**前台窗口**才会真刷新——后台跑时窗口不在前台，keystroke
+    打空、页面根本没刷新（实测「刷新后候选人一模一样」即此故障）。故先激活 Chrome 到前台。
+    实测激活后刷新，每次都能换出 6-7/8 个新候选人。
+    """
     print("  🔄 刷新页面获取新候选人...", end=" ", flush=True)
+    try:
+        subprocess.run(["osascript", "-e", 'tell application "Google Chrome" to activate'],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    time.sleep(0.6)
     cua("hotkey", json.dumps({"pid": pid, "window_id": wid, "keys": ["cmd", "r"]}))
     for _ in range(6):
         time.sleep(2)
@@ -363,18 +374,6 @@ def _refresh_page(pid: int, wid: int):
     elem_count = snap.get("element_count", 0)
     greet_count = snap.get("tree_markdown", "").count("打招呼")
     print(f"✓ ({greet_count}打招呼, {elem_count}元素)")
-
-
-def _scroll_down(pid: int, wid: int, times: int = 3):
-    """向下滚动页面加载更多候选人"""
-    for _ in range(times):
-        cua("page", json.dumps({
-            "pid": pid, "window_id": wid,
-            "action": "execute_javascript",
-            "javascript": "window.scrollBy(0, 800)",
-        }))
-        time.sleep(1.5)
-    time.sleep(2)  # 等 React 渲染新卡片
 
 
 def _click_greet_button(pid: int, wid: int, idx: int) -> bool:
@@ -448,12 +447,12 @@ def process_candidates(
     seen_candidates = set()  # 跨页去重: (name, school)
     stop_reason = "完成"
     page_round = 1
-    # 找不到新面孔时：先滚动加载，滚够仍无新人就刷新换批；持续刷新直到打满 limit 或撞上限弹窗。
-    # 仅当「连续刷新 MAX_REFRESH_NO_NEW 次、每次都零新面孔」才判定真实耗尽（防 BOSS 反复发同一批时死循环）。
-    SCROLL_BEFORE_REFRESH = 2   # 刷新前先滚动几次(BOSS 懒加载分批)
-    MAX_REFRESH_NO_NEW = 10     # 连续多少次刷新无新面孔才认定耗尽(放宽，确保尽量多翻)
-    scroll_streak = 0   # 当前批次连续滚动无新面孔次数
-    refresh_streak = 0  # 连续刷新无新面孔次数
+    # 找不到新面孔 → 刷新换批（_refresh_page 会先激活窗口，否则后台 cmd+R 打空、页面不真刷新）。
+    # 持续刷新直到：打满 limit、撞上限弹窗，或连续刷新 MAX_REFRESH_NO_NEW 次仍零新面孔才判耗尽。
+    # 注：推荐列表在 iframe 虚拟列表里，window.scrollBy / cua 原生 scroll 都无效（AX 不随滚动更新），
+    #     故不滚动、只靠刷新换批。实测激活后刷新每次能换 6-7/8 个新候选人。
+    MAX_REFRESH_NO_NEW = 8   # 连续多少次刷新仍零新面孔才认定耗尽(防 BOSS 反复发同一批死循环)
+    refresh_streak = 0       # 连续刷新无新面孔次数
 
     while greeted < limit:
         # ── 每次循环都获取最新 AX 树 ──
@@ -482,14 +481,8 @@ def process_candidates(
             break
 
         if best is None:
-            # 当前已加载的候选人都处理过了。策略：先滚动加载更多；滚够仍无新面孔则刷新换一批；
+            # 当前 AX 可见候选人都处理过了 → 刷新换一批（刷新前激活窗口才会真生效）。
             # 持续刷新——直到打满 limit、撞上限弹窗，或连续刷新 MAX_REFRESH_NO_NEW 次仍零新面孔(兜底)。
-            if scroll_streak < SCROLL_BEFORE_REFRESH:
-                scroll_streak += 1
-                print(f"  📜 滚动加载更多候选人(第{scroll_streak}次)...", end=" ", flush=True)
-                _scroll_down(pid, wid)
-                continue
-            # 滚到底仍无新面孔 → 刷新换批
             refresh_streak += 1
             if refresh_streak > MAX_REFRESH_NO_NEW:
                 print(f"  ⚠ 连续刷新 {MAX_REFRESH_NO_NEW} 次仍无新候选人，判定候选人耗尽，停止")
@@ -498,11 +491,9 @@ def process_candidates(
             print(f"  🔄 刷新页面获取新候选人(第{refresh_streak}/{MAX_REFRESH_NO_NEW}次)...", end=" ", flush=True)
             _refresh_page(pid, wid)
             page_round += 1
-            scroll_streak = 0   # 刷新后重新从滚动开始
             continue
 
-        # 找到新面孔 → 清零所有「无新面孔」计数（只要还在产出新候选人就一直翻下去）
-        scroll_streak = 0
+        # 找到新面孔 → 清零刷新计数（只要还在产出新候选人就一直翻下去）
         refresh_streak = 0
 
         name = best.get("name", "?")
