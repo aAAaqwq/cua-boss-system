@@ -448,7 +448,12 @@ def process_candidates(
     seen_candidates = set()  # 跨页去重: (name, school)
     stop_reason = "完成"
     page_round = 1
-    empty_rounds = 0  # 连续无新候选人计数，防无限刷新
+    # 找不到新面孔时：先滚动加载，滚够仍无新人就刷新换批；持续刷新直到打满 limit 或撞上限弹窗。
+    # 仅当「连续刷新 MAX_REFRESH_NO_NEW 次、每次都零新面孔」才判定真实耗尽（防 BOSS 反复发同一批时死循环）。
+    SCROLL_BEFORE_REFRESH = 2   # 刷新前先滚动几次(BOSS 懒加载分批)
+    MAX_REFRESH_NO_NEW = 10     # 连续多少次刷新无新面孔才认定耗尽(放宽，确保尽量多翻)
+    scroll_streak = 0   # 当前批次连续滚动无新面孔次数
+    refresh_streak = 0  # 连续刷新无新面孔次数
 
     while greeted < limit:
         # ── 每次循环都获取最新 AX 树 ──
@@ -477,23 +482,28 @@ def process_candidates(
             break
 
         if best is None:
-            # 当前页所有候选人都已处理 → 先尝试滚动加载更多
-            empty_rounds += 1
-            if empty_rounds == 1:
-                print(f"  📜 滚动加载更多候选人...", end=" ", flush=True)
+            # 当前已加载的候选人都处理过了。策略：先滚动加载更多；滚够仍无新面孔则刷新换一批；
+            # 持续刷新——直到打满 limit、撞上限弹窗，或连续刷新 MAX_REFRESH_NO_NEW 次仍零新面孔(兜底)。
+            if scroll_streak < SCROLL_BEFORE_REFRESH:
+                scroll_streak += 1
+                print(f"  📜 滚动加载更多候选人(第{scroll_streak}次)...", end=" ", flush=True)
                 _scroll_down(pid, wid)
                 continue
-            elif empty_rounds == 2:
-                print(f"  🔄 刷新页面...", end=" ", flush=True)
-                _refresh_page(pid, wid)
-                page_round += 1
-                continue
-            else:
-                print(f"  ⚠ 连续{empty_rounds}轮无新候选人, 停止")
+            # 滚到底仍无新面孔 → 刷新换批
+            refresh_streak += 1
+            if refresh_streak > MAX_REFRESH_NO_NEW:
+                print(f"  ⚠ 连续刷新 {MAX_REFRESH_NO_NEW} 次仍无新候选人，判定候选人耗尽，停止")
                 stop_reason = "候选人耗尽"
                 break
+            print(f"  🔄 刷新页面获取新候选人(第{refresh_streak}/{MAX_REFRESH_NO_NEW}次)...", end=" ", flush=True)
+            _refresh_page(pid, wid)
+            page_round += 1
+            scroll_streak = 0   # 刷新后重新从滚动开始
+            continue
 
-        empty_rounds = 0
+        # 找到新面孔 → 清零所有「无新面孔」计数（只要还在产出新候选人就一直翻下去）
+        scroll_streak = 0
+        refresh_streak = 0
 
         name = best.get("name", "?")
         school = best.get("school", "?")
