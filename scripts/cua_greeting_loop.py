@@ -498,7 +498,10 @@ def process_candidates(
 
         name = best.get("name", "?")
         school = best.get("school", "?")
-        degree = best.get("degree", "?")
+        # 学历未读到 → 传空("")而非"?"：check_candidate 对空学历**宽松放行**(只在学历已知且
+        # 低于要求时才拒)。推荐卡片渲染有先后，扫描时学历元素常没及时出现 → 读成空；而学校
+        # 已是白名单(985/211/海外名校，几乎必≥本科)，此时按"?"当低学历误杀是 bug(实测大量误杀)。
+        degree = best.get("degree", "")
         idx = best.get("greet_index")
 
         judged += 1
@@ -508,7 +511,7 @@ def process_candidates(
         status = "✅" if passed else "  "
 
         # 进度按「已打招呼/目标」展示（judged=看过的卡片数，不是打招呼数）
-        print(f"  [打{greeted}/{limit} 看{judged}] {status} {name:10s} | {school:16s} | {degree:4s}"
+        print(f"  [打{greeted}/{limit} 看{judged}] {status} {name:10s} | {school:16s} | {(degree or '?'):4s}"
               + (f" | {fail_reason}" if fail_reason else ""))
 
         if not passed:
