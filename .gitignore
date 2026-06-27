@@ -17,3 +17,7 @@ data/backups/
 data/resumes/
 # 候选人数据库（含真实 PII：姓名/电话/微信/简历正文，不提交；init_db() 启动时自建）
 data/candidates.db
+# 云同步待补推队列（含上云 payload = 真实 PII，不提交）
+data/cloud_queue.jsonl
+web/config.js
+data/.cloud_auth.json

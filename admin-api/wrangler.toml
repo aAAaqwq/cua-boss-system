@@ -1,0 +1,12 @@
+name = "bole-admin-api"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# 非密配置（URL/管理员uid 公开无妨）
+[vars]
+SUPABASE_URL = "https://nfmeknfnopeakugqphia.supabase.co"
+ADMIN_UIDS = "0889e3d2-b042-4c6c-95eb-e9d9580a7c3e"
+
+# 密钥用 `wrangler secret put` 注入，不写这里：
+#   wrangler secret put ANON_KEY
+#   wrangler secret put SERVICE_KEY

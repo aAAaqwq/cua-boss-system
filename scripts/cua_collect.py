@@ -1108,6 +1108,9 @@ def main():
                    help="收集后不自动评分(默认收集完即对有简历者实时评分并缓存)")
     args = p.parse_args()
 
+    from app.cloud_sync import require_account
+    require_account()  # 许可门禁：必须用我们下发的账号登录才能运行
+
     whitelist = ([s.strip() for s in args.schools.split(",")] if args.schools
                  else ALL_ELITE_SCHOOLS)
 
@@ -1159,6 +1162,7 @@ def main():
     conn = init_db() if not args.dry_run else None
     stats = {"collected": 0, "unsuitable": 0, "skipped": 0}
     scored_uids = []  # 本轮收集到、有简历正文、待自动评分的 uid
+    collected_uids = []  # 本轮收集到的所有 uid，用于采集后自动云同步
 
     contacts = scan_contacts(pid, wid)
     print(f"  {len(contacts)} 个联系人")
@@ -1331,6 +1335,8 @@ def main():
             }
             if not args.dry_run: upsert(conn, data)
             stats["collected"] += 1
+            if contact_uid:
+                collected_uids.append(contact_uid)  # 用于本轮采集后云同步
             # 有 uid + 简历正文 → 纳入本轮自动评分队列(无简历者评分会跳过, 不入队)
             if contact_uid and resume_content:
                 scored_uids.append(contact_uid)
@@ -1349,6 +1355,14 @@ def main():
         count = conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
         print(f"数据库: {DB_PATH} ({count} 条)")
         conn.close()
+        # 自动云同步（CLOUD_SYNC=on 时）：把本轮收集到的人增量上传一份。
+        # best-effort：未开/未配置直接跳过；失败入队列；绝不影响已入库的本地数据。
+        if not args.dry_run and collected_uids:
+            try:
+                from app.cloud_sync import push_uids
+                push_uids(collected_uids)
+            except Exception as e:  # noqa: BLE001 — 云同步异常绝不影响采集
+                print(f"  ⚠ 云同步异常(已忽略，不影响本地数据): {e}")
 
 
 if __name__ == "__main__":

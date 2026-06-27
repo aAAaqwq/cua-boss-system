@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>伯乐 · 管理后台</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<style>
+  :root{--bg:oklch(97.5% .008 255);--panel:oklch(100% 0 0);--ink:oklch(24% .02 262);--muted:oklch(56% .02 262);
+    --accent:oklch(52% .2 295);--accent-soft:oklch(95% .04 295);--line:oklch(91% .008 262);--good:oklch(58% .15 150);--bad:oklch(55% .2 25);
+    --shadow:0 2px 6px rgba(20,22,55,.06),0 12px 36px rgba(20,22,55,.08);--r:14px}
+  *{box-sizing:border-box}body{margin:0;font-family:-apple-system,"PingFang SC",system-ui,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+  button{cursor:pointer;font:inherit;border:none;border-radius:9px;transition:.15s}
+  input{padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;background:var(--bg);color:var(--ink)}
+  input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+  #login{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(120% 80% at 50% -10%,var(--accent-soft),transparent 60%),var(--bg)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}
+  .login-card{width:min(380px,93vw);padding:38px 32px}
+  .brand{font-weight:800;letter-spacing:-.02em;font-size:26px}.brand small{display:block;font-size:13px;font-weight:500;color:var(--muted);margin-top:6px}
+  label{display:block;font-size:13px;color:var(--muted);margin:16px 0 6px}
+  .btn{padding:11px 16px;background:var(--accent);color:#fff;font-weight:600;font-size:14px}.btn:hover{filter:brightness(1.08)}
+  .btn-sm{padding:6px 11px;font-size:12.5px}.btn-ghost{background:var(--bg);border:1px solid var(--line);color:var(--ink)}
+  .btn-danger{background:oklch(95% .05 25);color:var(--bad)}.btn-ok{background:oklch(94% .06 150);color:var(--good)}
+  .full{width:100%;margin-top:22px}.err{color:var(--bad);font-size:13px;margin-top:12px;min-height:18px}
+  #app{display:none;max-width:1100px;margin:0 auto;padding:22px 24px 60px}
+  header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+  header .brand{font-size:20px;display:flex;align-items:center;gap:9px}
+  .tag{font-size:11px;background:var(--accent-soft);color:var(--accent);padding:3px 9px;border-radius:99px;font-weight:700}
+  .who{font-size:13px;color:var(--muted)}
+  .sec{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:20px;overflow:hidden}
+  .sec h3{margin:0;padding:16px 20px;font-size:15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .pad{padding:16px 20px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:11px 16px;border-bottom:1px solid oklch(94.5% .006 262)}
+  th{font-size:12px;color:var(--muted);font-weight:600}tr:last-child td{border-bottom:none}tbody tr:hover{background:var(--bg)}
+  .badge{font-size:12px;padding:3px 9px;border-radius:99px}.badge.ok{background:oklch(94% .06 150);color:var(--good)}.badge.no{background:oklch(95% .04 25);color:var(--bad)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .muted{color:var(--muted)}.link{color:var(--accent);cursor:pointer}
+  .scroll{overflow:auto;max-height:60vh}
+</style>
+</head>
+<body>
+
+<section id="login">
+  <div class="card login-card">
+    <div class="brand">伯乐 管理后台<small>仅管理员可登录 · 管理所有用户与数据</small></div>
+    <label>管理员邮箱</label><input id="email" type="email" style="width:100%" placeholder="admin@..." />
+    <label>密码</label><input id="password" type="password" style="width:100%" />
+    <button class="btn full" id="loginBtn">登录</button>
+    <div class="err" id="err"></div>
+  </div>
+</section>
+
+<main id="app">
+  <header>
+    <div class="brand">伯乐 管理后台 <span class="tag">ADMIN</span></div>
+    <div class="row"><span class="who" id="who"></span><button class="btn-sm btn-ghost" id="logout">退出</button></div>
+  </header>
+
+  <div class="sec">
+    <h3>用户管理 <button class="btn-sm" id="reload">刷新</button></h3>
+    <div class="scroll"><table>
+      <thead><tr><th>邮箱</th><th>状态</th><th>候选人</th><th>创建</th><th>操作</th></tr></thead>
+      <tbody id="users"></tbody>
+    </table></div>
+    <div class="pad row" style="border-top:1px solid var(--line)">
+      <input id="nEmail" placeholder="新账号邮箱" style="flex:1;min-width:160px" />
+      <input id="nPwd" placeholder="初始密码" style="flex:1;min-width:140px" />
+      <button class="btn-sm btn" id="createBtn">开通账号</button>
+    </div>
+  </div>
+
+  <div class="sec" id="dataSec" style="display:none">
+    <h3><span id="dataTitle">候选人数据</span> <button class="btn-sm btn-ghost" id="closeData">收起</button></h3>
+    <div class="scroll"><table>
+      <thead><tr><th>姓名</th><th>学校</th><th>学历</th><th>岗位</th><th>评分</th><th>手机</th><th>微信</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </div>
+</main>
+
+<script>
+const CFG = window.__BOLE_CFG__||{}; const sb = supabase.createClient(CFG.url, CFG.anon);
+const $=id=>document.getElementById(id); let TOKEN='';
+const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, opts={}){
+  const r = await fetch(CFG.adminApi+path, {...opts, headers:{Authorization:`Bearer ${TOKEN}`,'content-type':'application/json',...(opts.headers||{})}});
+  const d = await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||r.status); return d;
+}
+
+async function loadUsers(){
+  const {users} = await api('/api/users');
+  $('users').innerHTML = users.map(u=>`<tr>
+    <td>${esc(u.email)}</td>
+    <td><span class="badge ${u.banned?'no':'ok'}">${u.banned?'停用':'正常'}</span></td>
+    <td>${u.count} ${u.count?`<span class="link" data-view="${u.id}" data-mail="${esc(u.email)}">查看</span>`:''}</td>
+    <td class="muted">${(u.created_at||'').slice(0,10)}</td>
+    <td><button class="btn-sm ${u.banned?'btn-ok':'btn-danger'}" data-ban="${u.id}" data-on="${u.banned?0:1}">${u.banned?'恢复':'停用'}</button></td>
+  </tr>`).join('');
+  $('users').querySelectorAll('[data-ban]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('确定'+(b.dataset.on==='1'?'停用':'恢复')+'该账号?'))return;
+    await api('/api/ban',{method:'POST',body:JSON.stringify({id:b.dataset.ban,ban:b.dataset.on==='1'})}); loadUsers();
+  });
+  $('users').querySelectorAll('[data-view]').forEach(v=>v.onclick=()=>viewData(v.dataset.view,v.dataset.mail));
+}
+async function viewData(tenant,mail){
+  const {rows}=await api('/api/data?tenant='+tenant);
+  $('dataTitle').textContent=`${mail} 的候选人（${rows.length}）`; $('dataSec').style.display='block';
+  $('rows').innerHTML=rows.map(r=>`<tr><td>${esc(r.name)||'—'}</td><td>${esc(r.school)||''}</td><td>${esc(r.degree)||''}</td>
+    <td>${esc(r.job_position)||''}</td><td>${r.score!=null?Math.round(r.score):'—'}</td>
+    <td>${esc(r.phone)||'—'}</td><td>${esc(r.wechat)||'—'}</td></tr>`).join('');
+  $('dataSec').scrollIntoView({behavior:'smooth'});
+}
+async function showApp(session){
+  TOKEN=session.access_token; $('login').style.display='none'; $('app').style.display='block'; $('who').textContent=session.user.email;
+  try{ await loadUsers(); }catch(e){ alert('无管理员权限或加载失败：'+e.message); await sb.auth.signOut(); location.reload(); }
+}
+$('loginBtn').onclick=async()=>{
+  $('err').textContent='';
+  const {data,error}=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});
+  if(error){$('err').textContent=error.message;return;} showApp(data.session);
+};
+$('password').addEventListener('keydown',e=>{if(e.key==='Enter')$('loginBtn').click();});
+$('reload').onclick=loadUsers;
+$('closeData').onclick=()=>$('dataSec').style.display='none';
+$('createBtn').onclick=async()=>{
+  const email=$('nEmail').value.trim(),password=$('nPwd').value.trim();
+  if(!email||!password){alert('填邮箱和密码');return;}
+  try{ await api('/api/create',{method:'POST',body:JSON.stringify({email,password})});
+    alert('已开通：'+email+'\n把邮箱密码发给用户，让其本地 login'); $('nEmail').value='';$('nPwd').value=''; loadUsers();
+  }catch(e){ alert('创建失败：'+e.message); }
+};
+$('logout').onclick=async()=>{await sb.auth.signOut();location.reload();};
+(async()=>{const {data:{session}}=await sb.auth.getSession();if(session)showApp(session);})();
+</script>
+</body>
+</html>
