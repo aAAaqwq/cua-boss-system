@@ -3,20 +3,25 @@
 零 pip 依赖，纯 urllib。**best-effort**：失败入本地队列 `data/cloud_queue.jsonl`，
 下次自动补推，**绝不阻塞本地采集**。本地 SQLite 永远是真源，云端是下游镜像。
 
-v1：全字段镜像、按 `(tenant_id, uid)` 幂等 upsert。
+鉴权（两种，**优先「登录绑定」**）：
+  1) 登录绑定（推荐·多用户）：`python scripts/cloud_sync.py login` 用账号密码换 user token，
+     存 `data/.cloud_auth.json`（gitignored）。push 用 **user token**——RLS 保证**只能写自己 tenant**，
+     tenant 自动 = 登录账号的 uid，**无需手填 TENANT_ID**。账号由服务端(我们)创建/注册下发。
+  2) service_role（仅拥有者/管理·绕过 RLS）：`.env` 设 `SUPABASE_KEY`(service_role)+`TENANT_ID`。
+     权限过大，**不要下发给普通用户**。
 
-配置（`.env` / 环境变量，优先级：环境变量 > .env）：
-  CLOUD_SYNC     总开关 on/off（默认 off；未开则所有 push 直接跳过）
-  SUPABASE_URL   形如 https://xxxxx.supabase.co
-  SUPABASE_KEY   service_role 或 anon key（同时用于 apikey + Bearer）
-  TENANT_ID      本机数据归属的租户（= 用户 Supabase auth uid，uuid）
-  CLOUD_TABLE    目标表名（默认 candidates）
-
-> 详见 docs/cloud-sync-plan.md。建表 SQL 见 supabase/schema.sql。
+配置（`.env`）：
+  CLOUD_SYNC          总开关 on/off（默认 off）
+  SUPABASE_URL        https://xxxxx.supabase.co
+  SUPABASE_ANON_KEY   anon key（公开安全；登录 + push 用）
+  SUPABASE_KEY        service_role（可选，仅拥有者）
+  TENANT_ID           service_role 模式下的租户（登录模式忽略，自动取登录 uid）
+  CLOUD_TABLE         目标表（默认 candidates）
 """
 import json
 import os
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,13 +29,13 @@ from typing import Optional
 
 from app.db import DB_PATH
 
-_QUEUE_PATH = Path(__file__).parent.parent / "data" / "cloud_queue.jsonl"
-_ENV_PATH = Path(__file__).parent.parent / ".env"
+_ROOT = Path(__file__).parent.parent
+_QUEUE_PATH = _ROOT / "data" / "cloud_queue.jsonl"
+_AUTH_PATH = _ROOT / "data" / ".cloud_auth.json"   # 登录态(refresh_token等)，gitignored
+_ENV_PATH = _ROOT / ".env"
 _CONFLICT_KEYS = "tenant_id,uid"
 _HTTP_TIMEOUT = 30
-_QUEUE_MAX_LINES = 50000  # 队列上限，防失控膨胀
 
-# 上云字段（本地 candidates 列 → 云端同名列）。本地自增主键 id 不上云。
 _CLOUD_COLUMNS = (
     "uid", "name", "job_position", "school", "degree",
     "resume_content", "resume_filename", "resume_path", "has_resume",
@@ -45,7 +50,6 @@ _env_loaded = False
 
 
 def _load_env() -> None:
-    """从项目根 .env 加载（不覆盖已有环境变量，仅一次）。复用与 chat_reply 相同的约定。"""
     global _env_loaded
     if _env_loaded:
         return
@@ -63,25 +67,141 @@ def _load_env() -> None:
 
 
 def config() -> dict:
-    """读取云同步配置。"""
     _load_env()
     return {
         "enabled": os.environ.get("CLOUD_SYNC", "off").lower() in ("on", "1", "true", "yes"),
         "url": os.environ.get("SUPABASE_URL", "").rstrip("/"),
-        "key": os.environ.get("SUPABASE_KEY", ""),
+        "anon": os.environ.get("SUPABASE_ANON_KEY", ""),
+        "service_key": os.environ.get("SUPABASE_KEY", ""),
         "tenant": os.environ.get("TENANT_ID", ""),
         "table": os.environ.get("CLOUD_TABLE", "candidates"),
     }
 
 
-def is_configured(cfg: Optional[dict] = None) -> bool:
-    """URL / KEY / TENANT 是否都齐了（齐了才能真上传）。"""
-    cfg = cfg or config()
-    return bool(cfg["url"] and cfg["key"] and cfg["tenant"])
+# ── 通用 HTTP（返回 (status, json|text, err)）──
+def _http(url: str, method: str = "GET", headers: Optional[dict] = None,
+          body: Optional[dict] = None) -> tuple:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", "ignore")
+            try:
+                return getattr(resp, "status", resp.getcode()), json.loads(raw or "null"), ""
+            except json.JSONDecodeError:
+                return getattr(resp, "status", resp.getcode()), raw, ""
+    except urllib.error.HTTPError as e:
+        return e.code, None, e.read().decode("utf-8", "ignore")[:200]
+    except Exception as e:  # noqa: BLE001
+        return 0, None, str(e)
 
+
+# ══════════════════════════════════════════════════
+# 登录绑定（推荐的多用户鉴权）
+# ══════════════════════════════════════════════════
+
+def _load_auth() -> dict:
+    if not _AUTH_PATH.exists():
+        return {}
+    try:
+        return json.loads(_AUTH_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_auth(d: dict) -> None:
+    _AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _AUTH_PATH.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.chmod(_AUTH_PATH, 0o600)  # 仅本人可读
+    except OSError:
+        pass
+
+
+def clear_auth() -> None:
+    if _AUTH_PATH.exists():
+        _AUTH_PATH.unlink()
+
+
+def login(email: str, password: str, cfg: Optional[dict] = None) -> tuple:
+    """用账号密码登录 Supabase，换取并保存 user token。返回 (ok, msg)。"""
+    cfg = cfg or config()
+    if not (cfg["url"] and cfg["anon"]):
+        return False, "缺少 SUPABASE_URL / SUPABASE_ANON_KEY"
+    status, body, err = _http(
+        f"{cfg['url']}/auth/v1/token?grant_type=password",
+        method="POST",
+        headers={"apikey": cfg["anon"], "Content-Type": "application/json"},
+        body={"email": email, "password": password},
+    )
+    if status != 200 or not isinstance(body, dict) or "access_token" not in body:
+        return False, f"登录失败: {err or status}"
+    user = body.get("user") or {}
+    _save_auth({
+        "access_token": body["access_token"],
+        "refresh_token": body.get("refresh_token", ""),
+        "uid": user.get("id", ""),
+        "email": user.get("email", email),
+        "expires_at": time.time() + int(body.get("expires_in", 3600)) - 60,
+    })
+    return True, user.get("email", email)
+
+
+def _refresh(cfg: dict, auth: dict) -> dict:
+    """用 refresh_token 续期 access_token；失败返回 {}。"""
+    rt = auth.get("refresh_token")
+    if not rt:
+        return {}
+    status, body, _ = _http(
+        f"{cfg['url']}/auth/v1/token?grant_type=refresh_token",
+        method="POST",
+        headers={"apikey": cfg["anon"], "Content-Type": "application/json"},
+        body={"refresh_token": rt},
+    )
+    if status != 200 or not isinstance(body, dict) or "access_token" not in body:
+        return {}
+    user = body.get("user") or {}
+    auth.update({
+        "access_token": body["access_token"],
+        "refresh_token": body.get("refresh_token", rt),
+        "uid": user.get("id", auth.get("uid", "")),
+        "expires_at": time.time() + int(body.get("expires_in", 3600)) - 60,
+    })
+    _save_auth(auth)
+    return auth
+
+
+def auth_context(cfg: Optional[dict] = None) -> Optional[dict]:
+    """返回当前可用的鉴权上下文（优先登录态），否则 None。
+
+    {apikey, bearer, tenant, source('login'|'service_role'), email}
+    """
+    cfg = cfg or config()
+    # 1) 登录态优先
+    auth = _load_auth()
+    if auth.get("access_token") and cfg["url"] and cfg["anon"]:
+        if time.time() >= auth.get("expires_at", 0):
+            auth = _refresh(cfg, auth)  # 过期 → 续期
+        if auth.get("access_token"):
+            return {"apikey": cfg["anon"], "bearer": auth["access_token"],
+                    "tenant": auth.get("uid", ""), "source": "login",
+                    "email": auth.get("email", "")}
+    # 2) service_role（仅拥有者）
+    if cfg["service_key"] and cfg["tenant"] and cfg["url"]:
+        return {"apikey": cfg["service_key"], "bearer": cfg["service_key"],
+                "tenant": cfg["tenant"], "source": "service_role", "email": ""}
+    return None
+
+
+def is_ready(cfg: Optional[dict] = None) -> bool:
+    return auth_context(cfg) is not None
+
+
+# ══════════════════════════════════════════════════
+# 上云
+# ══════════════════════════════════════════════════
 
 def to_cloud(row: dict, tenant: str) -> dict:
-    """本地 candidates 行（dict）→ 云端 payload（全字段 + tenant_id）。"""
     payload = {"tenant_id": tenant}
     for col in _CLOUD_COLUMNS:
         if col in row:
@@ -89,15 +209,13 @@ def to_cloud(row: dict, tenant: str) -> dict:
     return payload
 
 
-def _post(cfg: dict, payloads: list) -> tuple:
-    """向 PostgREST 批量 upsert。返回 (ok, msg)。"""
+def _post(cfg: dict, ctx: dict, payloads: list) -> tuple:
     url = f"{cfg['url']}/rest/v1/{cfg['table']}?on_conflict={_CONFLICT_KEYS}"
     data = json.dumps(payloads, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST", headers={
-        "apikey": cfg["key"],
-        "Authorization": f"Bearer {cfg['key']}",
+        "apikey": ctx["apikey"],
+        "Authorization": f"Bearer {ctx['bearer']}",
         "Content-Type": "application/json",
-        # merge-duplicates = upsert；return=minimal 省流量
         "Prefer": "resolution=merge-duplicates,return=minimal",
     })
     try:
@@ -105,14 +223,12 @@ def _post(cfg: dict, payloads: list) -> tuple:
             code = getattr(resp, "status", resp.getcode())
             return (200 <= code < 300), f"HTTP {code}"
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "ignore")[:200]
-        return False, f"HTTP {e.code}: {body}"
-    except Exception as e:  # noqa: BLE001 — 网络层异常统一降级入队
+        return False, f"HTTP {e.code}: {e.read().decode('utf-8', 'ignore')[:200]}"
+    except Exception as e:  # noqa: BLE001
         return False, str(e)
 
 
 def _enqueue(payloads: list) -> None:
-    """上云失败 → 追加到本地队列，下次补推。"""
     _QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _QUEUE_PATH.open("a", encoding="utf-8") as f:
         for p in payloads:
@@ -126,19 +242,19 @@ def queue_size() -> int:
 
 
 def push(rows: list, cfg: Optional[dict] = None, verbose: bool = True) -> dict:
-    """把本地行（dict 列表）上云。失败入队列，绝不抛出。"""
     cfg = cfg or config()
-    if not is_configured(cfg):
+    ctx = auth_context(cfg)
+    if ctx is None:
         if verbose:
-            print("    ⚠ 云同步未配置(SUPABASE_URL/KEY/TENANT_ID)，跳过")
-        return {"ok": False, "reason": "unconfigured", "pushed": 0}
-    payloads = [to_cloud(r, cfg["tenant"]) for r in rows]
+            print("    ⚠ 云同步未鉴权(请先 `cloud_sync.py login`，或配置 service_role)，跳过")
+        return {"ok": False, "reason": "unauthenticated", "pushed": 0}
+    payloads = [to_cloud(r, ctx["tenant"]) for r in rows]
     if not payloads:
         return {"ok": True, "pushed": 0}
-    ok, msg = _post(cfg, payloads)
+    ok, msg = _post(cfg, ctx, payloads)
     if ok:
         if verbose:
-            print(f"    ☁ 已上云 {len(payloads)} 条")
+            print(f"    ☁ 已上云 {len(payloads)} 条（{ctx['source']}{(' '+ctx['email']) if ctx['email'] else ''}）")
         return {"ok": True, "pushed": len(payloads)}
     _enqueue(payloads)
     if verbose:
@@ -147,20 +263,23 @@ def push(rows: list, cfg: Optional[dict] = None, verbose: bool = True) -> dict:
 
 
 def flush_queue(cfg: Optional[dict] = None, verbose: bool = True) -> dict:
-    """补推本地队列里积压的记录；全部成功才清空队列。"""
     cfg = cfg or config()
-    if not _QUEUE_PATH.exists() or not is_configured(cfg):
+    ctx = auth_context(cfg)
+    if not _QUEUE_PATH.exists() or ctx is None:
         return {"ok": True, "flushed": 0}
-    lines = [line for line in _QUEUE_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines = [l for l in _QUEUE_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
     if not lines:
         return {"ok": True, "flushed": 0}
     try:
-        payloads = [json.loads(line) for line in lines]
+        payloads = [json.loads(l) for l in lines]
     except json.JSONDecodeError:
         if verbose:
-            print("    ⚠ 队列文件损坏，跳过补推（保留文件待人工检查）")
+            print("    ⚠ 队列文件损坏，跳过补推")
         return {"ok": False, "reason": "corrupt_queue", "flushed": 0}
-    ok, msg = _post(cfg, payloads)
+    # 队列里的 tenant 以当前登录身份为准（防止换账号后串租户）
+    for p in payloads:
+        p["tenant_id"] = ctx["tenant"]
+    ok, msg = _post(cfg, ctx, payloads)
     if ok:
         _QUEUE_PATH.unlink()
         if verbose:
@@ -172,7 +291,6 @@ def flush_queue(cfg: Optional[dict] = None, verbose: bool = True) -> dict:
 
 
 def _fetch_rows(uids: Optional[list] = None, limit: Optional[int] = None) -> list:
-    """从本地 DB 取候选人行（dict）。uids 指定则按 uid 取，否则全量(可 limit)。"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -193,17 +311,17 @@ def _fetch_rows(uids: Optional[list] = None, limit: Optional[int] = None) -> lis
 
 
 def push_uids(uids: list, cfg: Optional[dict] = None, verbose: bool = True) -> dict:
-    """按 uid 从本地 DB 取行并上云（供 pipeline/collect/score 末尾调用）。
+    """按 uid 从本地 DB 取行并上云（供 pipeline/collect/chat 末尾调用）。
 
-    总开关 CLOUD_SYNC=off 或未配置 → 直接跳过（不打扰、不报错）。
+    CLOUD_SYNC=off → 跳过；未登录/未鉴权 → 跳过（不报错）。
     """
     cfg = cfg or config()
     if not cfg["enabled"]:
         return {"ok": False, "reason": "disabled", "pushed": 0}
-    if not is_configured(cfg):
+    if auth_context(cfg) is None:
         if verbose:
-            print("    ⚠ CLOUD_SYNC=on 但未配置 SUPABASE_URL/KEY/TENANT_ID，跳过上云")
-        return {"ok": False, "reason": "unconfigured", "pushed": 0}
-    flush_queue(cfg, verbose=verbose)  # 先补历史积压
+            print("    ⚠ CLOUD_SYNC=on 但未登录(先 `cloud_sync.py login`)，跳过上云")
+        return {"ok": False, "reason": "unauthenticated", "pushed": 0}
+    flush_queue(cfg, verbose=verbose)
     rows = _fetch_rows(uids=uids)
     return push(rows, cfg, verbose=verbose)
