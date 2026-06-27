@@ -1592,12 +1592,11 @@ def main():
     print(f"\n{'=' * 60}")
     print(f"审查完成，聊天记录已存入 {DB_PATH}")
     print(f"{'=' * 60}")
-    # 自动云同步（CLOUD_SYNC=on 时）：把本轮沟通/更新过的人增量上传一份。
-    # best-effort：未开/未配置直接跳过；失败入队列；绝不影响本地数据。
-    if not args.dry_run and touched_uids:
+    # 自动增量同步：推所有「未同步/改动过」的行(含历史漏网)，失败下次自动补，无需手动 push。
+    if not args.dry_run:
         try:
-            from app.cloud_sync import push_uids
-            push_uids(list(touched_uids))
+            from app.cloud_sync import sync_pending
+            sync_pending()
         except Exception as e:  # noqa: BLE001 — 云同步异常绝不影响沟通
             print(f"  ⚠ 云同步异常(已忽略，不影响本地数据): {e}")
 

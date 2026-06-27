@@ -350,3 +350,71 @@ def push_uids(uids: list, cfg: Optional[dict] = None, verbose: bool = True) -> d
     flush_queue(cfg, verbose=verbose)
     rows = _fetch_rows(uids=uids)
     return push(rows, cfg, verbose=verbose)
+
+
+# ══════════════════════════════════════════════════
+# 增量同步（推「未同步 或 改动过」的所有行，绝不漏）
+# ══════════════════════════════════════════════════
+
+def _pending_rows(limit: Optional[int] = None) -> list:
+    """待同步行：有 uid 且（从未同步 synced_at IS NULL，或数据比上次同步更新 updated_at>synced_at）。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        sql = ("SELECT * FROM candidates WHERE uid IS NOT NULL AND uid != '' "
+               "AND (synced_at IS NULL OR updated_at > synced_at) ORDER BY updated_at")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [dict(r) for r in conn.execute(sql).fetchall()]
+    finally:
+        conn.close()
+
+
+def _mark_synced(uids: list) -> None:
+    """标记已同步：synced_at=now。synced_at 不在 _TOUCH_COLUMNS，不会反向触发 updated_at。"""
+    uids = [u for u in uids if u]
+    if not uids:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        qs = ",".join("?" * len(uids))
+        conn.execute(f"UPDATE candidates SET synced_at = CURRENT_TIMESTAMP WHERE uid IN ({qs})", uids)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def pending_count() -> int:
+    return len(_pending_rows())
+
+
+def sync_pending(cfg: Optional[dict] = None, verbose: bool = True) -> dict:
+    """**自动增量同步**：推所有「未同步/改动过」的行（不只本轮），成功后标记 synced_at。
+
+    失败不标记 → 下次自动重推（synced_at 即持久化的「待同步」状态，比临时队列更可靠）。
+    供 collect/chat/pipeline 末尾调用——任何原因漏掉的行下次一跑自动补齐，无需手动 push。
+    """
+    cfg = cfg or config()
+    if not cfg["enabled"]:
+        return {"ok": False, "reason": "disabled", "pushed": 0}
+    ctx = auth_context(cfg)
+    if ctx is None:
+        if verbose:
+            print("    ⚠ CLOUD_SYNC=on 但未登录(先 `cloud_sync.py login`)，跳过上云")
+        return {"ok": False, "reason": "unauthenticated", "pushed": 0}
+    flush_queue(cfg, verbose=verbose)  # 先排空历史队列(向后兼容)
+    rows = _pending_rows()
+    if not rows:
+        if verbose:
+            print("    ☁ 云同步: 无待同步行")
+        return {"ok": True, "pushed": 0}
+    payloads = [to_cloud(r, ctx["tenant"]) for r in rows]
+    ok, msg = _post(cfg, ctx, payloads)
+    if ok:
+        _mark_synced([r["uid"] for r in rows])
+        if verbose:
+            print(f"    ☁ 增量上云 {len(rows)} 条(含历史漏网，自动补齐)")
+        return {"ok": True, "pushed": len(rows)}
+    if verbose:
+        print(f"    ⚠ 上云失败({msg})，{len(rows)} 条 synced_at 未更新 → 下次自动补推")
+    return {"ok": False, "reason": msg, "pushed": 0}

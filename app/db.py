@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     interview_time TEXT,
     interview_at TIMESTAMP,
     extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    synced_at TIMESTAMP
 )
 """
 
@@ -50,7 +51,7 @@ _PATCH_COLUMNS = (
     "uid", "chat_history", "resume_path",
     "score_summary", "scored_at",
     "interview_type", "interview_date", "interview_time", "interview_at",
-    "updated_at", "wechat_requested",
+    "updated_at", "wechat_requested", "synced_at",
 )
 
 # ── 数据更新时间戳：collect/chat_loop 等改动「相关数据列」时自动刷新 updated_at。

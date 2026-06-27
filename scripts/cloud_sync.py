@@ -66,15 +66,16 @@ def cmd_status() -> None:
         print(f"  鉴权              : ✅ 已登录 {ctx['email']}（tenant={ctx['tenant']}）")
     else:
         print(f"  鉴权              : ⚠ service_role（拥有者模式，绕过RLS，tenant={ctx['tenant']}）")
-    print(f"  待补推队列        : {cs.queue_size()} 条")
+    print(f"  待同步行          : {cs.pending_count()} 条（未同步/改动过，下次跑自动补）")
+    print(f"  待补推队列(旧)    : {cs.queue_size()} 条")
 
 
 def cmd_dry_run(limit) -> None:
     cfg = cs.config()
     ctx = cs.auth_context(cfg)
     tenant = (ctx and ctx["tenant"]) or "<登录后自动填>"
-    rows = cs._fetch_rows(limit=limit)
-    print(f"=== DRY-RUN：将上传 {len(rows)} 条到表 `{cfg['table']}`（不连云）===")
+    rows = cs._pending_rows(limit=limit)
+    print(f"=== DRY-RUN：增量同步将上传 {len(rows)} 条待同步行到 `{cfg['table']}`（不连云）===")
     print(f"租户 tenant_id = {tenant}（来源：{ctx['source'] if ctx else '未鉴权'}）\n")
     for r in rows:
         p = cs.to_cloud(r, tenant)
@@ -89,10 +90,8 @@ def cmd_push(limit) -> None:
     if cs.auth_context(cfg) is None:
         print("❌ 未鉴权。请先 `python scripts/cloud_sync.py login`（或拥有者配 service_role）。")
         sys.exit(1)
-    cs.flush_queue(cfg)
-    rows = cs._fetch_rows(limit=limit)
-    print(f"推送 {len(rows)} 条 …")
-    result = cs.push(rows, cfg)
+    print(f"增量同步：待同步 {cs.pending_count()} 条 …")
+    result = cs.sync_pending(cfg)
     print(f"结果: {result}")
     sys.exit(0 if result.get("ok") else 1)
 
