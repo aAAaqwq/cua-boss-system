@@ -212,6 +212,36 @@ def get_contact_uid(name, pid, wid):
     return None
 
 
+def dom_contact_uids(pid, wid):
+    """一次性按 DOM 顺序读取所有联系人的 (uid, name)。
+
+    BOSS 侧边栏每个联系人是 `<div class="geek-item" data-id="<uid>-0">`，内含 `.geek-name`。
+    返回按自上而下顺序的 [{"uid","name"}, ...]。供循环按「姓名+出现次序」**原子匹配** uid——
+    修 #2「重名张冠李戴」：点击是按 AX 索引(正确的人)，但旧 uid 按姓名搜会取到第一个同名卡片，
+    重名时配错 uid。改用本函数 + 出现次序，使 uid 与实际点击的联系人同源。
+    """
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript",
+        "javascript": """
+        (function(){
+            var out = [];
+            var items = document.querySelectorAll('.geek-item[data-id]');
+            for (var i = 0; i < items.length; i++) {
+                var li = items[i];
+                var did = li.getAttribute('data-id');
+                if (!did || !/^\\d/.test(did)) continue;
+                var nmEl = li.querySelector('.geek-name');
+                out.push({uid: did.replace(/-\\d+$/, ''), name: nmEl ? (nmEl.textContent||'').trim() : ''});
+            }
+            return JSON.stringify({contacts: out});
+        })()
+        """,
+    }))
+    if isinstance(r, dict) and isinstance(r.get("contacts"), list):
+        return r["contacts"]
+    return []
+
+
 def click_sidebar_ax(idx: int, pid: int, wid: int) -> bool:
     """AX 点击侧边栏联系人（替代 JS 方案，避免 AppleScript 桥接问题）"""
     result = cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": idx}))
@@ -1172,11 +1202,22 @@ def main():
     contacts = scan_contacts(pid, wid)
     print(f"  {len(contacts)} 个联系人")
 
+    # #2 修重名张冠李戴：按 DOM 顺序一次性取 (uid,name)，循环里按「姓名+出现次序」原子匹配 uid
+    from collections import defaultdict
+    name_uids = defaultdict(list)
+    for d in dom_contact_uids(pid, wid):
+        if d.get("name"):
+            name_uids[d["name"]].append(d["uid"])
+    name_occ = defaultdict(int)
+
     for i, contact in enumerate(contacts):
         if stats["collected"] + stats["unsuitable"] >= args.limit:
             break
 
         name = contact["name"]
+        # #2: 按 DOM 顺序「姓名+出现次序」取该联系人 uid（与实际点击的人同源，重名不串）
+        _k = name_occ[name]; name_occ[name] += 1
+        pos_uid = name_uids[name][_k] if _k < len(name_uids[name]) else None
         print(f"\n  [{i+1}/{min(len(contacts), args.limit)}] {name} | {contact['job']}")
 
         # 点侧边栏: 优先用 AX 点击（索引来自 scan_contacts），失败再试 JS
@@ -1193,11 +1234,12 @@ def main():
                 clicked, contact_uid = click_sidebar(name, pid, wid)
         if not clicked:
             print(f"    ❌ 点击失败"); stats["skipped"] += 1; continue
-        # AX 点击不提取 uid，单独再读一次 data-id（不重新点击）。
-        # uid 是与 chat_loop 关联的唯一键，缺失会导致简历写入孤儿行、无法注入聊天。
+        # #2: uid 优先用「DOM 顺序按姓名出现次序」的原子匹配（与实际点击的人同源，重名不串）；
+        # 其次用 JS 点击带回的 uid；最后才回退脆弱的姓名搜索 get_contact_uid。
+        contact_uid = pos_uid or contact_uid
         if not contact_uid:
             contact_uid = get_contact_uid(name, pid, wid)
-            if not contact_uid:  # #2 渲染时序可能没读到 → 短暂重试一次
+            if not contact_uid:  # 渲染时序可能没读到 → 短暂重试一次
                 time.sleep(0.8)
                 contact_uid = get_contact_uid(name, pid, wid)
         if contact_uid:
