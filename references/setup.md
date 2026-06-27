@@ -126,6 +126,13 @@ pgrep -x "Google Chrome" && echo "x Chrome 运行中"
   - 智能沟通 / 收集 -> 沟通页（聊天页）
   - 同步职位 -> 职位管理页
 
+### 账号登录（🔒 许可门禁，必须）
+
+- [ ] **已登录授权账号**：`python scripts/cloud_sync.py login --email <邮箱> --password <密码>`
+  - 未登录时 `boss_pipeline / cua_greeting_loop / cua_collect / cua_chat_loop` **启动即拒跑**（打印登录指引并退出）。
+  - 账号由管理员后台开通（公开注册已关闭）；查看状态 `python scripts/cloud_sync.py --status`。
+  - 拥有者在 `.env` 配了 service_role 则豁免。详见 [权限架构](../docs/权限架构.md)。
+
 ### 3. 配置文件
 
 ```bash

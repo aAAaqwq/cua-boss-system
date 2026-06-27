@@ -33,6 +33,7 @@
 
 | # | 动作 | 命令 / 操作 |
 |---|------|------------|
+| 0 | **登录授权账号**（🔒 必须，否则所有自动化脚本启动即拒跑）| `python scripts/cloud_sync.py login --email <邮箱> --password <密码>`；账号由管理员后台开通（公开注册已关闭）。已登录可跳过；拥有者配 service_role 可免。见 [数据安全说明](docs/数据安全说明.md)/[权限架构](docs/权限架构.md) |
 | 1-3 | **环境就绪**：安装依赖 + 跑「运行前检查清单」 | 见 [references/setup.md](references/setup.md) |
 | 4 | **同步岗位信息** | `python scripts/cua_sync_jobs.py --write` |
 | 5 | **配置专属话术 + 评分细则**（先查看现有配置，**如有必要**再引导用户调整） | 查看 `config/reply.json`、`config/scoring.json`；按需 `python scripts/gen_reply_templates.py --all --write` 生成话术，编辑 `scoring.json` 调权重 |
@@ -52,6 +53,7 @@
 
 | 用户说... | 应执行... |
 |-----------|-----------|
+| 登录、认证、绑定账号、没账号、提示需要登录、脚本拒跑/退出 | `cloud_sync.py login`（许可门禁：未登录则所有自动化脚本拒跑） |
 | 完整流程、全自动、一键、全套、pipeline、从打招呼到沟通 | `boss_pipeline.py`（打招呼→收集→沟通，参数化） |
 | 排行榜、评分排名、最近几天最佳候选人、谁最合适、top10 | `query_db.py --rank` |
 | 约面试、预约面试、发面试邀请、安排线上/线下面试 | `cua_interview.py` |
