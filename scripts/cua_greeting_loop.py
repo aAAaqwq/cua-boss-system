@@ -569,6 +569,9 @@ def main():
     parser.add_argument("--min-degree", type=str, default=DEFAULT_MIN_DEGREE, help=f"最低学历 (默认{DEFAULT_MIN_DEGREE})")
     args = parser.parse_args()
 
+    from app.cloud_sync import require_account
+    require_account()  # 许可门禁：必须用我们下发的账号登录才能运行
+
     school_whitelist = (
         [s.strip() for s in args.schools.split(",")]
         if args.schools else ALL_ELITE_SCHOOLS

@@ -1508,6 +1508,9 @@ def main():
     parser.add_argument("--config", type=str, default=None, help="话术模板文件路径")
     args = parser.parse_args()
 
+    from app.cloud_sync import require_account
+    require_account()  # 许可门禁：必须用我们下发的账号登录才能运行
+
     # 学校白名单
     school_whitelist = (
         [s.strip() for s in args.schools.split(",")]

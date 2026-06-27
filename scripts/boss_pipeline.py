@@ -65,6 +65,9 @@ def main() -> None:
     p.add_argument("--skip-chat", action="store_true", help="跳过智能沟通")
     args = p.parse_args()
 
+    from app.cloud_sync import require_account
+    require_account()  # 许可门禁：必须用我们下发的账号登录才能运行
+
     common = []
     if args.min_degree:
         common += ["--min-degree", args.min_degree]

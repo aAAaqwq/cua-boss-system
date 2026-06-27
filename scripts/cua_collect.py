@@ -1108,6 +1108,9 @@ def main():
                    help="收集后不自动评分(默认收集完即对有简历者实时评分并缓存)")
     args = p.parse_args()
 
+    from app.cloud_sync import require_account
+    require_account()  # 许可门禁：必须用我们下发的账号登录才能运行
+
     whitelist = ([s.strip() for s in args.schools.split(",")] if args.schools
                  else ALL_ELITE_SCHOOLS)
 

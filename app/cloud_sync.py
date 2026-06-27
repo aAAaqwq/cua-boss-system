@@ -79,10 +79,16 @@ def config() -> dict:
 
 
 # ── 通用 HTTP（返回 (status, json|text, err)）──
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")  # 避开 api.supabase.com 对 urllib UA 的 WAF(1010)
+
+
 def _http(url: str, method: str = "GET", headers: Optional[dict] = None,
           body: Optional[dict] = None) -> tuple:
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    headers = dict(headers or {})
+    headers.setdefault("User-Agent", _UA)
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", "ignore")
@@ -195,6 +201,25 @@ def auth_context(cfg: Optional[dict] = None) -> Optional[dict]:
 
 def is_ready(cfg: Optional[dict] = None) -> bool:
     return auth_context(cfg) is not None
+
+
+def require_account() -> dict:
+    """许可门禁：本产品的 agent **必须用我们下发的账号登录**后才能运行。
+
+    未登录(且非拥有者 service_role) → 打印登录指引并退出。
+    在 greeting/collect/chat/pipeline 入口处调用，确保「无账号无法驱动程序」。
+    """
+    ctx = auth_context()
+    if ctx is None:
+        import sys
+        print("=" * 58)
+        print("🔒 需要登录授权账号才能使用本产品")
+        print("  本程序须用【我们下发的账号】登录后才能运行：")
+        print("    python scripts/cloud_sync.py login --email <邮箱> --password <密码>")
+        print("  没有账号？请联系管理员开通（账号仅由后台创建）。")
+        print("=" * 58)
+        sys.exit(1)
+    return ctx
 
 
 # ══════════════════════════════════════════════════
