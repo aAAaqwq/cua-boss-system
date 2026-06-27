@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     has_resume INTEGER DEFAULT 0,
     wechat TEXT,
     has_wechat INTEGER DEFAULT 0,
+    wechat_requested INTEGER DEFAULT 0,
     phone TEXT,
     email TEXT,
     score REAL DEFAULT 0,
@@ -49,7 +50,7 @@ _PATCH_COLUMNS = (
     "uid", "chat_history", "resume_path",
     "score_summary", "scored_at",
     "interview_type", "interview_date", "interview_time", "interview_at",
-    "updated_at",
+    "updated_at", "wechat_requested",
 )
 
 # ── 数据更新时间戳：collect/chat_loop 等改动「相关数据列」时自动刷新 updated_at。

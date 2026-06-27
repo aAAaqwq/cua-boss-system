@@ -188,18 +188,18 @@ def get_contact_uid(name, pid, wid):
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": f"""
         (function(){{
-            var all = document.querySelectorAll('*');
-            for (var i = 0; i < all.length; i++) {{
-                var el = all[i];
-                if ((el.textContent||'').trim()==='{safe}' && el.children.length<=1 && el.offsetWidth>0) {{
-                    for (var p = el; p && p !== document.body; p = p.parentElement) {{
-                        var did = p.getAttribute('data-id');
-                        if (did) {{
-                            var clean = did.replace(/-\\d+$/, '');
-                            return JSON.stringify({{uid: clean, key: 'data-id', raw: did}});
-                        }}
+            // #2 修脆弱匹配：只在带 data-id 的联系人 li 内精确匹配姓名叶子节点
+            // （避开聊天区/标题里出现的同名文本、避免取到非联系人元素）
+            var lis = document.querySelectorAll('[data-id]');
+            for (var i = 0; i < lis.length; i++) {{
+                var li = lis[i];
+                var did = li.getAttribute('data-id');
+                if (!did || !/^\\d/.test(did) || !(li.offsetWidth > 0)) continue;
+                var els = li.querySelectorAll('*');
+                for (var j = 0; j < els.length; j++) {{
+                    if ((els[j].textContent||'').trim() === '{safe}') {{
+                        return JSON.stringify({{uid: did.replace(/-\\d+$/, ''), key: 'data-id'}});
                     }}
-                    break;
                 }}
             }}
             return JSON.stringify({{uid: null}});
@@ -965,8 +965,8 @@ def upsert(conn, data):
         conn.execute("""
             INSERT INTO candidates
                 (uid, name, job_position, school, degree, resume_content, resume_filename,
-                 resume_path, has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resume_path, has_resume, wechat, has_wechat, wechat_requested, phone, email, score, status, notes, extracted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(uid) DO UPDATE SET
                 name = excluded.name,
                 job_position = excluded.job_position,
@@ -978,6 +978,7 @@ def upsert(conn, data):
                 has_resume = CASE WHEN excluded.has_resume = 1 THEN 1 ELSE candidates.has_resume END,
                 wechat = CASE WHEN excluded.wechat != '' THEN excluded.wechat ELSE candidates.wechat END,
                 has_wechat = CASE WHEN excluded.has_wechat = 1 THEN 1 ELSE candidates.has_wechat END,
+                wechat_requested = CASE WHEN excluded.wechat_requested = 1 THEN 1 ELSE candidates.wechat_requested END,
                 phone = CASE WHEN excluded.phone != '' THEN excluded.phone ELSE candidates.phone END,
                 email = CASE WHEN excluded.email != '' THEN excluded.email ELSE candidates.email END,
                 status = excluded.status,
@@ -990,6 +991,7 @@ def upsert(conn, data):
             data.get("resume_path",""),
             1 if data.get("has_resume") else 0,
             data.get("wechat",""), 1 if data.get("has_wechat") else 0,
+            1 if data.get("wechat_requested") else 0,
             data.get("phone",""), data.get("email",""),
             data.get("score",0), data.get("status","collected"),
             data.get("notes",""), datetime.now().isoformat(),
@@ -1008,6 +1010,7 @@ def upsert(conn, data):
                 has_resume = CASE WHEN ? = 1 THEN 1 ELSE has_resume END,
                 wechat = CASE WHEN ? != '' THEN ? ELSE wechat END,
                 has_wechat = CASE WHEN ? = 1 THEN 1 ELSE has_wechat END,
+                wechat_requested = CASE WHEN ? = 1 THEN 1 ELSE wechat_requested END,
                 phone = CASE WHEN ? != '' THEN ? ELSE phone END,
                 email = CASE WHEN ? != '' THEN ? ELSE email END,
                 status = ?, notes = ?, extracted_at = CURRENT_TIMESTAMP
@@ -1020,6 +1023,7 @@ def upsert(conn, data):
             1 if data.get("has_resume") else 0,
             data.get("wechat",""), data.get("wechat",""),
             1 if data.get("has_wechat") else 0,
+            1 if data.get("wechat_requested") else 0,
             data.get("phone",""), data.get("phone",""),
             data.get("email",""), data.get("email",""),
             data.get("status","collected"), data.get("notes",""),
@@ -1029,8 +1033,8 @@ def upsert(conn, data):
             conn.execute("""
                 INSERT INTO candidates
                     (name, job_position, school, degree, resume_content, resume_filename,
-                     resume_path, has_resume, wechat, has_wechat, phone, email, score, status, notes, extracted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     resume_path, has_resume, wechat, has_wechat, wechat_requested, phone, email, score, status, notes, extracted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, job,
                 data.get("school",""), data.get("degree",""),
@@ -1038,6 +1042,7 @@ def upsert(conn, data):
                 data.get("resume_path",""),
                 1 if data.get("has_resume") else 0,
                 data.get("wechat",""), 1 if data.get("has_wechat") else 0,
+                1 if data.get("wechat_requested") else 0,
                 data.get("phone",""), data.get("email",""),
                 data.get("score",0), data.get("status","collected"),
                 data.get("notes",""), datetime.now().isoformat(),
@@ -1192,8 +1197,13 @@ def main():
         # uid 是与 chat_loop 关联的唯一键，缺失会导致简历写入孤儿行、无法注入聊天。
         if not contact_uid:
             contact_uid = get_contact_uid(name, pid, wid)
+            if not contact_uid:  # #2 渲染时序可能没读到 → 短暂重试一次
+                time.sleep(0.8)
+                contact_uid = get_contact_uid(name, pid, wid)
         if contact_uid:
             print(f"    uid: {contact_uid}")
+        else:
+            print(f"    ⚠ uid 未取到（{name}）——将写为无 uid 行，无法上云/跨脚本匹配（#2）")
         time.sleep(2)  # 等右侧面板加载
 
         panel = read_panel(pid, wid, whitelist)
@@ -1287,16 +1297,19 @@ def main():
             if conn:
                 if contact_uid:
                     wx_row = conn.execute(
-                        "SELECT wechat, has_wechat FROM candidates WHERE uid=?",
+                        "SELECT wechat, has_wechat, wechat_requested FROM candidates WHERE uid=?",
                         (contact_uid,)).fetchone()
                 else:
                     wx_row = conn.execute(
-                        "SELECT wechat, has_wechat FROM candidates WHERE name=? AND job_position=?",
+                        "SELECT wechat, has_wechat, wechat_requested FROM candidates WHERE name=? AND job_position=?",
                         (name, job)).fetchone()
-                if wx_row and wx_row[1] and wx_row[0]:
+                if wx_row and wx_row[0]:  # DB 已有微信号 → 直接用，跳过
                     wechat_id = wx_row[0]
                     wechat_requested = True
                     print(f"    → 微信: 已存在({wechat_id}), 跳过")
+                elif wx_row and (wx_row[2] or wx_row[1]):  # 已请求过待通过(或老库 has_wechat=1)无号 → 不重复请求
+                    wechat_requested = True
+                    print(f"    → 微信: 已请求待对方通过, 跳过")
 
             if not wechat_requested:
                 tree = ax_tree(pid, wid)
@@ -1330,7 +1343,11 @@ def main():
                 # 有正文 或 有附件文件 都算「有简历」（文件存在但正文暂为空时也如实标记，
                 # 评分阶段会按 resume_path 二次回捞正文，见 query_db --rank）
                 "has_resume": bool(resume_content) or bool(resume_path),
-                "wechat": wechat_id, "has_wechat": wechat_requested or bool(wechat_id),
+                # has_wechat 仅在真有微信号时为真（修 #3：原 `wechat_requested or ...` 把
+                # 「已请求未通过」误标成有微信，误导网页 + 让 chat 阶段逻辑不再追微信）；
+                # 「已请求」单独存 wechat_requested，避免下次重复点换微信。
+                "wechat": wechat_id, "has_wechat": bool(wechat_id),
+                "wechat_requested": wechat_requested,
                 "phone": phone, "email": email, "status": "collected",
             }
             if not args.dry_run: upsert(conn, data)
