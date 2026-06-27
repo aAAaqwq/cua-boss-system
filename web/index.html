@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>伯乐 · 招聘看板</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<style>
+  :root{
+    --bg:oklch(97.5% 0.008 255); --panel:oklch(100% 0 0);
+    --ink:oklch(24% 0.02 262); --muted:oklch(56% 0.02 262); --faint:oklch(72% 0.015 262);
+    --accent:oklch(54% 0.19 266); --accent-soft:oklch(95% 0.04 266);
+    --line:oklch(91% 0.008 262); --line-soft:oklch(94.5% 0.006 262);
+    --shadow-sm:0 1px 2px rgba(20,22,55,.06);
+    --shadow:0 2px 6px rgba(20,22,55,.06),0 12px 36px rgba(20,22,55,.08);
+    --r:14px;
+    --s:oklch(58% 0.17 150); --a:oklch(60% 0.15 200); --b:oklch(62% 0.14 255);
+    --c:oklch(70% 0.13 70); --d:oklch(66% 0.02 262);
+  }
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{font-family:-apple-system,"PingFang SC",system-ui,sans-serif;background:var(--bg);color:var(--ink);
+       -webkit-font-smoothing:antialiased;line-height:1.5}
+  button{cursor:pointer;font:inherit;border:none;border-radius:10px;transition:.15s}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:99px;border:3px solid var(--bg)}
+
+  /* ── 登录 ── */
+  #login{min-height:100vh;display:grid;place-items:center;padding:24px;
+    background:radial-gradient(120% 80% at 50% -10%,var(--accent-soft),transparent 60%),var(--bg)}
+  .login-card{width:min(390px,93vw);padding:40px 34px;background:var(--panel);
+    border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}
+  .brand{font-weight:800;letter-spacing:-.02em}
+  .login-card .brand{font-size:30px}
+  .brand .sub{display:block;font-size:13px;font-weight:500;color:var(--muted);margin-top:8px;letter-spacing:0}
+  label{display:block;font-size:13px;color:var(--muted);margin:18px 0 6px}
+  input{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--bg);color:var(--ink)}
+  input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+  .btn-primary{width:100%;margin-top:24px;padding:12px;background:var(--accent);color:#fff;font-size:15px;font-weight:600}
+  .btn-primary:hover{filter:brightness(1.08)} .btn-primary:active{transform:translateY(1px)}
+  .btn-primary:disabled{opacity:.6;cursor:default}
+  .err{color:oklch(55% 0.2 25);font-size:13px;margin-top:12px;min-height:18px}
+
+  /* ── 框架 ── */
+  #app{display:none;max-width:1240px;margin:0 auto;padding:22px 24px 60px}
+  header.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+  .bar .brand{font-size:21px;display:flex;align-items:center;gap:9px}
+  .dot{width:10px;height:10px;border-radius:99px;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  .right{display:flex;align-items:center;gap:12px}
+  .who{font-size:13px;color:var(--muted)}
+  .btn-ghost{padding:8px 14px;background:var(--panel);border:1px solid var(--line);color:var(--ink)}
+  .btn-ghost:hover{border-color:var(--faint)}
+
+  /* ── 统计卡 ── */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+  @media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow-sm)}
+  .stat b{display:block;font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1.1}
+  .stat span{font-size:12.5px;color:var(--muted)}
+
+  /* ── 工具条 ── */
+  .toolbar{display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .search{flex:1;min-width:200px;position:relative}
+  .search input{padding-left:36px}
+  .search svg{position:absolute;left:11px;top:11px;color:var(--faint)}
+  .chips{display:flex;gap:7px;flex-wrap:wrap}
+  .chip{padding:7px 13px;font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:99px;color:var(--muted)}
+  .chip.on{background:var(--accent);color:#fff;border-color:transparent}
+  .chip:hover:not(.on){border-color:var(--faint)}
+
+  /* ── 表格 ── */
+  .tablecard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-sm);overflow:hidden}
+  .scroll{overflow:auto;max-height:calc(100vh - 320px)}
+  table{width:100%;border-collapse:collapse;font-size:14px;min-width:760px}
+  th,td{text-align:left;padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+  th{font-size:12px;color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel);z-index:1}
+  tbody tr{cursor:pointer;transition:background .12s} tbody tr:hover{background:var(--bg)}
+  tbody tr:last-child td{border-bottom:none}
+  .nm{font-weight:600} .sub2{color:var(--muted);font-size:12.5px}
+  .score-pill{display:inline-flex;align-items:center;justify-content:center;min-width:38px;padding:3px 9px;border-radius:8px;font-weight:800;color:#fff;font-size:13px}
+  .badge{font-size:12px;padding:3px 9px;border-radius:99px;background:oklch(94% 0.01 262);color:var(--muted);white-space:nowrap}
+  .badge.interviewed{background:oklch(93% 0.06 150);color:var(--s)}
+  .badge.replied{background:oklch(93% 0.05 255);color:var(--b)}
+  .badge.unsuitable{background:oklch(93% 0.04 25);color:oklch(55% 0.18 25)}
+  .ico{display:inline-flex;gap:6px;color:var(--faint)}
+  .ico .has{color:var(--accent)}
+  .empty{padding:56px 24px;text-align:center;color:var(--muted)}
+  .loading{padding:56px;text-align:center;color:var(--muted)}
+
+  /* ── 详情抽屉 ── */
+  .scrim{position:fixed;inset:0;background:rgba(18,20,45,.32);opacity:0;pointer-events:none;transition:.2s;z-index:40}
+  .scrim.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:min(480px,94vw);background:var(--panel);
+    box-shadow:-12px 0 40px rgba(20,22,55,.18);transform:translateX(100%);transition:transform .26s cubic-bezier(.16,1,.3,1);
+    z-index:50;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .dh{padding:22px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .dh h2{margin:0;font-size:22px;letter-spacing:-.02em}
+  .dh .meta{color:var(--muted);font-size:13.5px;margin-top:5px}
+  .x{width:34px;height:34px;border-radius:9px;background:var(--bg);color:var(--muted);font-size:18px;flex:none}
+  .x:hover{background:var(--line-soft)}
+  .db{padding:20px 24px;overflow:auto;flex:1}
+  .sec{margin-bottom:22px}
+  .sec h4{margin:0 0 10px;font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+  .kv{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg);border-radius:10px;margin-bottom:8px;font-size:14px}
+  .kv .k{color:var(--muted);width:52px;flex:none}
+  .kv .v{flex:1;word-break:break-all}
+  .copy{font-size:12px;padding:4px 9px;background:var(--panel);border:1px solid var(--line);color:var(--accent);border-radius:7px}
+  .copy:hover{background:var(--accent-soft)}
+  .resume{white-space:pre-wrap;font-size:13.5px;line-height:1.7;background:var(--bg);border:1px solid var(--line-soft);
+    border-radius:12px;padding:14px 16px;max-height:340px;overflow:auto;color:var(--ink)}
+  .summary{background:var(--accent-soft);border-radius:12px;padding:13px 15px;font-size:13.5px;line-height:1.65}
+  .bub{margin-bottom:8px;display:flex} .bub.me{justify-content:flex-end}
+  .bub div{max-width:80%;padding:8px 12px;border-radius:13px;font-size:13.5px;line-height:1.5}
+  .bub.me div{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+  .bub.them div{background:var(--bg);border:1px solid var(--line-soft);border-bottom-left-radius:4px}
+  .none{color:var(--faint);font-size:13.5px}
+</style>
+</head>
+<body>
+
+<!-- 登录 -->
+<section id="login">
+  <div class="login-card">
+    <div class="brand">伯乐<span class="sub">BOSS 招聘自动化 · 候选人看板</span></div>
+    <label>邮箱</label>
+    <input id="email" type="email" autocomplete="username" placeholder="you@example.com" />
+    <label>密码</label>
+    <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" />
+    <button class="btn-primary" id="loginBtn">登录</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</section>
+
+<!-- 看板 -->
+<main id="app">
+  <header class="bar">
+    <div class="brand"><span class="dot"></span>伯乐 · 招聘看板</div>
+    <div class="right"><span class="who" id="who"></span><button class="btn-ghost" id="logoutBtn">退出</button></div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b id="cTotal">–</b><span>候选人</span></div>
+    <div class="stat"><b id="cResume">–</b><span>有简历</span></div>
+    <div class="stat"><b id="cWechat">–</b><span>有微信</span></div>
+    <div class="stat"><b id="cItv">–</b><span>已约面</span></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="q" placeholder="搜索 姓名 / 学校 / 岗位…" />
+    </div>
+    <div class="chips" id="chips">
+      <button class="chip on" data-f="all">全部</button>
+      <button class="chip" data-f="resume">有简历</button>
+      <button class="chip" data-f="wechat">有微信</button>
+      <button class="chip" data-f="interviewed">已约面</button>
+    </div>
+  </div>
+
+  <div class="tablecard">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>#</th><th>候选人</th><th>岗位</th><th>评分</th><th>状态</th><th>联系</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="loading" id="loading">加载中…</div>
+      <div class="empty" id="empty" style="display:none"></div>
+    </div>
+  </div>
+</main>
+
+<!-- 详情抽屉 -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer"></aside>
+
+<script>
+const CFG = window.__BOLE_CFG__ || {};
+const sb = (CFG.url && CFG.anon) ? supabase.createClient(CFG.url, CFG.anon) : null;
+const $ = (id)=>document.getElementById(id);
+let ALL = [], FILTER = 'all', Q = '';
+
+const esc = (s)=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function scoreColor(s){ if(s==null)return 'var(--d)'; if(s>=70)return 'var(--s)'; if(s>=50)return 'var(--a)'; if(s>=35)return 'var(--b)'; return 'var(--c)'; }
+function statusCls(s){ s=s||''; if(s.includes('interview'))return 'interviewed'; if(s.includes('repl'))return 'replied'; if(s.includes('unsuit'))return 'unsuitable'; return ''; }
+function statusZh(s){ return ({collected:'已收集',replied:'已回复',already_replied:'已回复',interviewed:'已面试',unsuitable:'不合适',soft_reject:'已搁置'})[s]||s||'—'; }
+
+function render(){
+  let rows = ALL.slice();
+  if(FILTER==='resume') rows=rows.filter(r=>r.has_resume||r.resume_content);
+  else if(FILTER==='wechat') rows=rows.filter(r=>r.wechat);
+  else if(FILTER==='interviewed') rows=rows.filter(r=>r.interview_date||(r.status||'').includes('interview'));
+  if(Q){ const q=Q.toLowerCase(); rows=rows.filter(r=>[r.name,r.school,r.job_position].some(x=>(x||'').toLowerCase().includes(q))); }
+  $('loading').style.display='none';
+  if(!rows.length){ $('rows').innerHTML=''; $('empty').style.display='block';
+    $('empty').innerHTML = ALL.length? '没有匹配的候选人' : '这个账号下还没有候选人数据<br><span class="none">让本地 agent 上传，或换个有数据的账号</span>'; return; }
+  $('empty').style.display='none';
+  $('rows').innerHTML = rows.map((r,i)=>`<tr data-uid="${esc(r.uid)}">
+    <td class="sub2">${i+1}</td>
+    <td><div class="nm">${esc(r.name)||'<span class=none>—</span>'}</div><div class="sub2">${esc(r.school)||''}${r.degree?' · '+esc(r.degree):''}</div></td>
+    <td class="sub2">${esc(r.job_position)||'—'}</td>
+    <td>${r.score!=null?`<span class="score-pill" style="background:${scoreColor(r.score)}">${Math.round(r.score)}</span>`:'<span class=none>未评</span>'}</td>
+    <td><span class="badge ${statusCls(r.status)}">${esc(statusZh(r.status))}</span></td>
+    <td><span class="ico"><span class="${r.phone?'has':''}" title="手机">📱</span><span class="${r.wechat?'has':''}" title="微信">💬</span><span class="${r.resume_content?'has':''}" title="简历">📄</span></span></td>
+  </tr>`).join('');
+  [...$('rows').querySelectorAll('tr')].forEach(tr=>tr.onclick=()=>openDrawer(tr.dataset.uid));
+}
+
+function openDrawer(uid){
+  const r = ALL.find(x=>String(x.uid)===String(uid)); if(!r) return;
+  let chat=''; try{ const arr=JSON.parse(r.chat_history||'[]');
+    chat = arr.length? arr.slice(-12).map(m=>`<div class="bub ${m.role==='boss'?'me':'them'}"><div>${esc(m.content)}</div></div>`).join('') : ''; }catch(e){}
+  const kv=(k,v,copy)=> v? `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span>${copy?`<button class="copy" data-c="${esc(v)}">复制</button>`:''}</div>`:'';
+  $('drawer').innerHTML = `
+    <div class="dh">
+      <div><h2>${esc(r.name)||'候选人'}</h2><div class="meta">${esc(r.school)||''}${r.degree?' · '+esc(r.degree):''}${r.job_position?' · '+esc(r.job_position):''}</div></div>
+      <button class="x" id="xBtn">✕</button>
+    </div>
+    <div class="db">
+      ${r.score!=null||r.score_summary?`<div class="sec"><h4>评分</h4>
+        ${r.score!=null?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><span class="score-pill" style="background:${scoreColor(r.score)};font-size:16px;min-width:46px;padding:6px 12px">${Math.round(r.score)}</span><span class="sub2">满分100</span></div>`:''}
+        ${r.score_summary?`<div class="summary">${esc(r.score_summary)}</div>`:''}</div>`:''}
+      <div class="sec"><h4>联系方式</h4>
+        ${kv('手机',r.phone,true)||''}${kv('微信',r.wechat,true)||''}${kv('邮箱',r.email,true)||''}
+        ${(!r.phone&&!r.wechat&&!r.email)?'<div class="none">未采集到联系方式</div>':''}</div>
+      ${(r.interview_date)?`<div class="sec"><h4>面试</h4><div class="kv"><span class="k">安排</span><span class="v">${esc(r.interview_type||'')} ${esc(r.interview_date||'')} ${esc(r.interview_time||'')}</span></div></div>`:''}
+      <div class="sec"><h4>简历正文</h4>${r.resume_content?`<div class="resume">${esc(r.resume_content)}</div>`:'<div class="none">未采集到简历正文</div>'}</div>
+      <div class="sec"><h4>沟通记录</h4>${chat||'<div class="none">暂无沟通记录</div>'}</div>
+    </div>`;
+  $('drawer').classList.add('open'); $('scrim').classList.add('open');
+  $('xBtn').onclick=closeDrawer;
+  [...$('drawer').querySelectorAll('.copy')].forEach(b=>b.onclick=()=>{navigator.clipboard?.writeText(b.dataset.c);b.textContent='已复制';setTimeout(()=>b.textContent='复制',1200);});
+}
+function closeDrawer(){ $('drawer').classList.remove('open'); $('scrim').classList.remove('open'); }
+$('scrim').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+
+async function showApp(session){
+  $('login').style.display='none'; $('app').style.display='block'; $('who').textContent=session.user.email;
+  const { data, error } = await sb.from('candidates').select('*')
+    .order('score',{ascending:false,nullsFirst:false}).order('updated_at',{ascending:false});
+  if(error){ $('loading').style.display='none'; $('empty').style.display='block'; $('empty').textContent='读取失败：'+error.message; return; }
+  ALL = data||[];
+  $('cTotal').textContent=ALL.length;
+  $('cResume').textContent=ALL.filter(r=>r.has_resume||r.resume_content).length;
+  $('cWechat').textContent=ALL.filter(r=>r.wechat).length;
+  $('cItv').textContent=ALL.filter(r=>r.interview_date).length;
+  render();
+}
+
+$('q').addEventListener('input',e=>{Q=e.target.value.trim();render();});
+$('chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;
+  [...$('chips').children].forEach(c=>c.classList.remove('on'));b.classList.add('on');FILTER=b.dataset.f;render();});
+$('loginBtn').onclick=async()=>{
+  $('loginErr').textContent=''; $('loginBtn').disabled=true; $('loginBtn').textContent='登录中…';
+  const { data, error } = await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});
+  $('loginBtn').disabled=false; $('loginBtn').textContent='登录';
+  if(error){ $('loginErr').textContent=error.message; return; } showApp(data.session);
+};
+$('password').addEventListener('keydown',e=>{if(e.key==='Enter')$('loginBtn').click();});
+$('logoutBtn').onclick=async()=>{await sb.auth.signOut();location.reload();};
+(async()=>{ if(!sb){$('loginErr').textContent='缺少 config.js';return;}
+  const { data:{session} } = await sb.auth.getSession(); if(session) showApp(session); })();
+</script>
+</body>
+</html>

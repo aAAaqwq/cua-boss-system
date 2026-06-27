@@ -19,3 +19,4 @@ data/resumes/
 data/candidates.db
 # 云同步待补推队列（含上云 payload = 真实 PII，不提交）
 data/cloud_queue.jsonl
+web/config.js
