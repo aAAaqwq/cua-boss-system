@@ -97,11 +97,27 @@ async function loadUsers(){
     <td><span class="badge ${u.banned?'no':'ok'}">${u.banned?'停用':'正常'}</span></td>
     <td>${u.count} ${u.count?`<span class="link" data-view="${u.id}" data-mail="${esc(u.email)}">查看</span>`:''}</td>
     <td class="muted">${(u.created_at||'').slice(0,10)}</td>
-    <td><button class="btn-sm ${u.banned?'btn-ok':'btn-danger'}" data-ban="${u.id}" data-on="${u.banned?0:1}">${u.banned?'恢复':'停用'}</button></td>
+    <td><div class="row" style="gap:6px">
+      <button class="btn-sm btn-ghost" data-email="${u.id}" data-cur="${esc(u.email)}">改邮箱</button>
+      <button class="btn-sm btn-ghost" data-pwd="${u.id}" data-mail="${esc(u.email)}">重置密码</button>
+      <button class="btn-sm ${u.banned?'btn-ok':'btn-danger'}" data-ban="${u.id}" data-on="${u.banned?0:1}">${u.banned?'恢复':'停用'}</button>
+    </div></td>
   </tr>`).join('');
   $('users').querySelectorAll('[data-ban]').forEach(b=>b.onclick=async()=>{
     if(!confirm('确定'+(b.dataset.on==='1'?'停用':'恢复')+'该账号?'))return;
-    await api('/api/ban',{method:'POST',body:JSON.stringify({id:b.dataset.ban,ban:b.dataset.on==='1'})}); loadUsers();
+    try{ await api('/api/ban',{method:'POST',body:JSON.stringify({id:b.dataset.ban,ban:b.dataset.on==='1'})}); loadUsers(); }
+    catch(e){ alert('操作失败：'+e.message); }
+  });
+  $('users').querySelectorAll('[data-email]').forEach(b=>b.onclick=async()=>{
+    const ne=prompt('新邮箱：', b.dataset.cur); if(!ne||ne.trim()===b.dataset.cur)return;
+    try{ await api('/api/update_email',{method:'POST',body:JSON.stringify({id:b.dataset.email,email:ne.trim()})}); alert('已改邮箱 → '+ne.trim()); loadUsers(); }
+    catch(e){ alert('改邮箱失败：'+e.message); }
+  });
+  $('users').querySelectorAll('[data-pwd]').forEach(b=>b.onclick=async()=>{
+    const np=prompt('给 '+b.dataset.mail+' 设新密码（≥6 位）：'); if(!np)return;
+    if(np.length<6){alert('密码至少 6 位');return;}
+    try{ await api('/api/reset_password',{method:'POST',body:JSON.stringify({id:b.dataset.pwd,password:np})}); alert('密码已重置（把新密码发给用户）'); }
+    catch(e){ alert('重置失败：'+e.message); }
   });
   $('users').querySelectorAll('[data-view]').forEach(v=>v.onclick=()=>viewData(v.dataset.view,v.dataset.mail));
 }
@@ -128,6 +144,7 @@ $('closeData').onclick=()=>$('dataSec').style.display='none';
 $('createBtn').onclick=async()=>{
   const email=$('nEmail').value.trim(),password=$('nPwd').value.trim();
   if(!email||!password){alert('填邮箱和密码');return;}
+  if(password.length<6){alert('密码至少 6 位');return;}
   try{ await api('/api/create',{method:'POST',body:JSON.stringify({email,password})});
     alert('已开通：'+email+'\n把邮箱密码发给用户，让其本地 login'); $('nEmail').value='';$('nPwd').value=''; loadUsers();
   }catch(e){ alert('创建失败：'+e.message); }

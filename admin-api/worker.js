@@ -57,6 +57,9 @@ export default {
         return J({ rows: (await r.json()) || [] });
       }
 
+      // 统一取 Supabase 返回的真实错误文案（透传，便于定位）
+      const errMsg = (d) => (d && (d.msg || d.error_description || d.error_code || d.error || d.message)) || JSON.stringify(d);
+
       if (path === "/api/create" && req.method === "POST") {
         const b = await req.json();
         if (!b.email || !b.password) return J({ error: "缺邮箱/密码" }, 400);
@@ -65,7 +68,29 @@ export default {
           body: JSON.stringify({ email: b.email, password: b.password, email_confirm: true }),
         });
         const d = await r.json();
-        return J(r.ok ? { ok: true, id: d.id, email: d.email } : { error: d.msg || d.error_description || "创建失败" }, r.ok ? 200 : 400);
+        return J(r.ok ? { ok: true, id: d.id, email: d.email } : { error: errMsg(d) }, r.ok ? 200 : 400);
+      }
+
+      if (path === "/api/update_email" && req.method === "POST") {
+        const b = await req.json();
+        if (!b.id || !b.email) return J({ error: "缺 id/email" }, 400);
+        const r = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${b.id}`, {
+          method: "PUT", headers: { ...svc, "content-type": "application/json" },
+          body: JSON.stringify({ email: b.email, email_confirm: true }),
+        });
+        const d = await r.json();
+        return J(r.ok ? { ok: true, email: d.email } : { error: errMsg(d) }, r.ok ? 200 : 400);
+      }
+
+      if (path === "/api/reset_password" && req.method === "POST") {
+        const b = await req.json();
+        if (!b.id || !b.password) return J({ error: "缺 id/password" }, 400);
+        const r = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${b.id}`, {
+          method: "PUT", headers: { ...svc, "content-type": "application/json" },
+          body: JSON.stringify({ password: b.password }),
+        });
+        const d = await r.json();
+        return J(r.ok ? { ok: true } : { error: errMsg(d) }, r.ok ? 200 : 400);
       }
 
       if (path === "/api/ban" && req.method === "POST") {
@@ -74,7 +99,8 @@ export default {
           method: "PUT", headers: { ...svc, "content-type": "application/json" },
           body: JSON.stringify({ ban_duration: b.ban ? "876000h" : "none" }),
         });
-        return J(r.ok ? { ok: true } : { error: "操作失败" }, r.ok ? 200 : 400);
+        const d = await r.json();
+        return J(r.ok ? { ok: true } : { error: errMsg(d) }, r.ok ? 200 : 400);
       }
 
       return J({ error: "not found" }, 404);
