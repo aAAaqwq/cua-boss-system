@@ -66,12 +66,21 @@ def _load_env() -> None:
             os.environ[key] = value
 
 
+# 项目公开常量——内置默认值，用户无需在 .env 配置，装好直接 `login` 即用。
+# anon key 是**公开安全**的（受 RLS 保护、本就嵌在网页里公开），URL 是公开地址；全体用户相同。
+# 如需切换项目，仍可用 .env / 环境变量 SUPABASE_URL / SUPABASE_ANON_KEY 覆盖。
+_DEFAULT_URL = "https://nfmeknfnopeakugqphia.supabase.co"
+_DEFAULT_ANON = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5m"
+                 "bWVrbmZub3BlYWt1Z3FwaGlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1MjI2MzgsImV4cCI6"
+                 "MjA5ODA5ODYzOH0.gnyQOD2o75Os3rr0PPT2gNnP9WaLJYBCG6YCC2uacpY")
+
+
 def config() -> dict:
     _load_env()
     return {
         "enabled": os.environ.get("CLOUD_SYNC", "off").lower() in ("on", "1", "true", "yes"),
-        "url": os.environ.get("SUPABASE_URL", "").rstrip("/"),
-        "anon": os.environ.get("SUPABASE_ANON_KEY", ""),
+        "url": (os.environ.get("SUPABASE_URL") or _DEFAULT_URL).rstrip("/"),
+        "anon": os.environ.get("SUPABASE_ANON_KEY") or _DEFAULT_ANON,
         "service_key": os.environ.get("SUPABASE_KEY", ""),
         "tenant": os.environ.get("TENANT_ID", ""),
         "table": os.environ.get("CLOUD_TABLE", "candidates"),
