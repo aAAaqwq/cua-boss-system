@@ -22,6 +22,23 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 SCRIPTS = PROJECT_ROOT / "scripts"
 
+TO_LIMIT_WORDS = {"max", "上限", "不限", "满", "顶"}
+
+
+def parse_limit(value: str) -> int:
+    """--greet 接受正整数，或 max/上限/0(=打招呼打到每日上限自动停)。"""
+    v = str(value).strip().lower()
+    if v in TO_LIMIT_WORDS or v == "0":
+        return 0  # 0 = 打到每日上限或候选人耗尽才停
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--greet 需为正整数或 max/上限，收到: {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError("--greet 不能为负")
+    return n
+
 
 def _run_step(name: str, script: str, step_args: list[str]) -> bool:
     """执行单个步骤脚本，实时透传输出。返回是否成功(退出码 0)。"""
@@ -48,9 +65,10 @@ def main() -> None:
         description="BOSS直聘全流程编排(打招呼→收集→沟通)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--greet", type=int, default=20,
+    p.add_argument("--greet", type=parse_limit, default=20,
                    help="打招呼步骤的 --limit：成功打招呼的人数(非读卡片数)，"
-                        "不符合筛选的会自动跳过并多翻卡片直到打满，默认 20(设大如 100 可打到每日上限)")
+                        "不符合筛选的会自动跳过并多翻卡片直到打满，默认 20；"
+                        "填 max/上限/0 = 打到每日上限自动停")
     p.add_argument("--collect", type=int, default=20,
                    help="收集步骤的 --limit：从聊天联系人列表【顶部往下处理的联系人个数】"
                         "(含被筛掉/无简历跳过的，按列表顺序前 N 个)，默认 20")
@@ -68,6 +86,8 @@ def main() -> None:
     from app.cloud_sync import require_account
     require_account()  # 许可门禁：必须用我们下发的账号登录才能运行
 
+    greet_disp = "到上限" if args.greet <= 0 else f"{args.greet}人"
+
     common = []
     if args.min_degree:
         common += ["--min-degree", args.min_degree]
@@ -78,7 +98,7 @@ def main() -> None:
     steps = [
         (
             not args.skip_greet,
-            f"Step 1/3 主动打招呼 (limit={args.greet})",
+            f"Step 1/3 主动打招呼 (limit={greet_disp})",
             "cua_greeting_loop.py",
             ["--limit", str(args.greet)]
             + (["--schools", args.schools] if args.schools else [])
@@ -101,7 +121,7 @@ def main() -> None:
     ]
 
     print("🚀 boss-pipeline 启动")
-    print(f"   打招呼={args.greet} 收集={args.collect} 沟通={args.chat}"
+    print(f"   打招呼={greet_disp} 收集={args.collect} 沟通={args.chat}"
           f" | dry_run={args.dry_run}")
 
     ran = 0

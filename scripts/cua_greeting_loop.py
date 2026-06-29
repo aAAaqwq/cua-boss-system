@@ -442,6 +442,8 @@ def process_candidates(
     """
     print("4. 扫描候选人并逐个处理...\n")
 
+    # limit<=0 表示「打到每日上限」：不设人数目标，循环到撞上限弹窗或候选人耗尽才停。
+    limit_disp = "上限" if limit <= 0 else str(limit)
     greeted = 0
     judged = 0
     seen_candidates = set()  # 跨页去重: (name, school)
@@ -454,7 +456,7 @@ def process_candidates(
     MAX_REFRESH_NO_NEW = 8   # 连续多少次刷新仍零新面孔才认定耗尽(防 BOSS 反复发同一批死循环)
     refresh_streak = 0       # 连续刷新无新面孔次数
 
-    while greeted < limit:
+    while limit <= 0 or greeted < limit:
         # ── 每次循环都获取最新 AX 树 ──
         snap = cua("get_window_state", json.dumps({"pid": pid, "window_id": wid}))
         tree = snap.get("tree_markdown", "")
@@ -511,7 +513,7 @@ def process_candidates(
         status = "✅" if passed else "  "
 
         # 进度按「已打招呼/目标」展示（judged=看过的卡片数，不是打招呼数）
-        print(f"  [打{greeted}/{limit} 看{judged}] {status} {name:10s} | {school:16s} | {(degree or '?'):4s}"
+        print(f"  [打{greeted}/{limit_disp} 看{judged}] {status} {name:10s} | {school:16s} | {(degree or '?'):4s}"
               + (f" | {fail_reason}" if fail_reason else ""))
 
         if not passed:
@@ -550,7 +552,7 @@ def process_candidates(
         time.sleep(random.uniform(1.5, 3))
 
     else:
-        stop_reason = f"已达打招呼目标 ({limit} 人)"
+        stop_reason = f"已达打招呼目标 ({limit} 人)"  # 仅 limit>0 时会经此退出
 
     return (greeted, judged, stop_reason)
 
@@ -559,10 +561,29 @@ def process_candidates(
 # 入口
 # ══════════════════════════════════════════════════
 
+TO_LIMIT_WORDS = {"max", "上限", "不限", "满", "顶"}
+
+
+def parse_limit(value: str) -> int:
+    """--limit 接受正整数，或 max/上限/0(=打到每日上限自动停)。"""
+    v = str(value).strip().lower()
+    if v in TO_LIMIT_WORDS or v == "0":
+        return 0  # 0 = 不设目标，打到每日上限或候选人耗尽才停
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--limit 需为正整数或 max/上限，收到: {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError("--limit 不能为负")
+    return n
+
+
 def main():
     parser = argparse.ArgumentParser(description="cua-driver 驱动 BOSS直聘打招呼")
-    parser.add_argument("--limit", type=int, default=20,
+    parser.add_argument("--limit", type=parse_limit, default=20,
                         help="打招呼人数上限：通过筛选并成功打招呼的人数 (默认20)；"
+                             "填 max/上限/0 = 打到每日上限自动停；"
                              "看过的卡片数不计入，候选人不足时提前停止")
     parser.add_argument("--dry-run", action="store_true", help="仅预览, 不实际打招呼")
     parser.add_argument("--schools", type=str, help="自定义学校白名单, 逗号分隔")
@@ -579,7 +600,7 @@ def main():
 
     print("=" * 50)
     print(f"BOSS打招呼 | {len(school_whitelist)}所学校 | "
-          f"学历={args.min_degree} | 上限{args.limit}人 | "
+          f"学历={args.min_degree} | 上限{'到上限' if args.limit <= 0 else str(args.limit)+'人'} | "
           f"{'预览' if args.dry_run else '执行'}")
     print("=" * 50)
 
