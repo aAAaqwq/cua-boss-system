@@ -62,6 +62,8 @@ python scripts/cua_interview.py --uid <UID> --type 线上 --date 2026-06-20 --ti
 
 **推荐流程**: 先 `collect` 收集简历和微信 -> 再 `chat_loop` 智能沟通（会读取 collect 写入的 DB 上下文）。或直接用 `boss_pipeline.py` 一条命令串起三步。完整的端到端验收流程见 [SKILL.md](SKILL.md) 的「最佳测试实践」。
 
+> 📂 涉及文件：[references/setup.md](references/setup.md)（安装/运行前检查）、[references/cli.md](references/cli.md)（命令/参数/定时）、[references/config.md](references/config.md)（话术/筛选/评分）、[references/faq.md](references/faq.md)（非技术用户应对）；配置见 `.env.example`、`config/filter.json`、`config/reply.json`、`config/scoring.json`。
+
 ## 接入 OpenClaw（Quick Start）
 
 把本项目装成 OpenClaw 上一个**专属招聘助手 agent「伯乐」**：它**永远以本项目为根**、每轮自动注入项目上下文、不外溢到别的项目。原理是 OpenClaw 的 per-agent `workspace` + `contextInjection:"always"`。
@@ -86,9 +88,11 @@ python3 -m json.tool ~/.openclaw/openclaw.json >/dev/null && echo "✓ openclaw.
 # 4. 重启 OpenClaw 服务，向「伯乐」发一句「跑一遍完整流程」即可
 ```
 
-- ✅ **永远知道 + 锁定本项目**：`workspace`=项目目录 → 目录硬隔离，且每轮自动注入项目根的 `AGENTS.md`/`CLAUDE.md`/`TOOLS.md`/`IDENTITY.md`/`SOUL.md`。
+- ✅ **永远知道 + 锁定本项目**：`workspace`=项目目录 → 目录硬隔离，且每轮自动注入项目根的 [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md) / [TOOLS.md](TOOLS.md) / [IDENTITY.md](IDENTITY.md) / [SOUL.md](SOUL.md)。
 - 🔒 **可选命令层硬约束 + 绑定专属入口**：给伯乐配 `exec-approvals.json` 白名单、`bindings` 绑 Telegram bot。
-- 完整 5 步（含 exec 白名单、渠道绑定、诚实边界）见 [references/setup.md](references/setup.md) 的「接入 OpenClaw」节。
+- 完整 5 步（含 exec 白名单、渠道绑定、诚实边界）见 **[references/setup.md](references/setup.md) 的「接入 OpenClaw」节**。
+
+> 📂 涉及文件：[references/setup.md](references/setup.md)（完整步骤）、[AGENTS.md](AGENTS.md)/[IDENTITY.md](IDENTITY.md)/[SOUL.md](SOUL.md)（伯乐人格）、[CLAUDE.md](CLAUDE.md)/[TOOLS.md](TOOLS.md)（项目上下文）、[SKILL.md](SKILL.md)（操作流程）。
 
 ## 配置文件架构
 
