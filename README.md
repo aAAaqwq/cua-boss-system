@@ -25,6 +25,10 @@
 ## 快速开始
 
 ```bash
+# 0. 登录授权账号（🔒 许可门禁，必须，否则所有自动化脚本启动即拒跑）
+python scripts/cloud_sync.py login --email <邮箱> --password <密码>
+# 账号由管理员后台开通（公开注册已关闭）；已登录可跳过
+
 # 1. 配置 DeepSeek API Key
 cp .env.example .env
 # 编辑 .env 填入 DEEPSEEK_API_KEY
@@ -57,6 +61,34 @@ python scripts/cua_interview.py --uid <UID> --type 线上 --date 2026-06-20 --ti
 ```
 
 **推荐流程**: 先 `collect` 收集简历和微信 -> 再 `chat_loop` 智能沟通（会读取 collect 写入的 DB 上下文）。或直接用 `boss_pipeline.py` 一条命令串起三步。完整的端到端验收流程见 [SKILL.md](SKILL.md) 的「最佳测试实践」。
+
+## 接入 OpenClaw（Quick Start）
+
+把本项目装成 OpenClaw 上一个**专属招聘助手 agent「伯乐」**：它**永远以本项目为根**、每轮自动注入项目上下文、不外溢到别的项目。原理是 OpenClaw 的 per-agent `workspace` + `contextInjection:"always"`。
+
+```bash
+# 1. 备份平台主配置（务必）
+cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%Y%m%d-%H%M%S)
+
+# 2. 在 ~/.openclaw/openclaw.json 的 agents.list 数组里加一个 agent：
+#    （model 段照抄同文件其它 agent；workspace 指向本项目目录）
+#    {
+#      "id": "bole", "name": "伯乐",
+#      "workspace": "<本项目绝对路径>",
+#      "model": { "primary": "<照抄其它 agent>", "fallbacks": ["..."] },
+#      "identity": { "name": "伯乐", "theme": "BOSS直聘招聘自动化助手", "emoji": "🎯" },
+#      "groupChat": { "mentionPatterns": ["伯乐","招聘","BOSS直聘","打招呼","收简历","候选人"] }
+#    }
+
+# 3. 校验 JSON 合法（不合法别重启，先恢复备份）
+python3 -m json.tool ~/.openclaw/openclaw.json >/dev/null && echo "✓ openclaw.json OK"
+
+# 4. 重启 OpenClaw 服务，向「伯乐」发一句「跑一遍完整流程」即可
+```
+
+- ✅ **永远知道 + 锁定本项目**：`workspace`=项目目录 → 目录硬隔离，且每轮自动注入项目根的 `AGENTS.md`/`CLAUDE.md`/`TOOLS.md`/`IDENTITY.md`/`SOUL.md`。
+- 🔒 **可选命令层硬约束 + 绑定专属入口**：给伯乐配 `exec-approvals.json` 白名单、`bindings` 绑 Telegram bot。
+- 完整 5 步（含 exec 白名单、渠道绑定、诚实边界）见 [references/setup.md](references/setup.md) 的「接入 OpenClaw」节。
 
 ## 配置文件架构
 
@@ -507,7 +539,13 @@ cua-boss-system/
 │   └── backups/              # DB 备份目录（backup_db() 自动创建）
 ├── .env                      # DeepSeek API 配置（gitignore）
 ├── .env.example              # DeepSeek API 配置模板
-├── SKILL.md                  # Agent 操作手册
+├── references/               # Agent 参考文档
+│   ├── setup.md              # 安装/运行前检查/接入 OpenClaw
+│   ├── cli.md                # 命令速查 + 定时任务映射
+│   ├── config.md             # 配置/话术/评分详解
+│   └── faq.md                # 非技术用户场景应对手册
+├── IDENTITY.md / SOUL.md / AGENTS.md  # CHRO助手「伯乐」人格三件套
+├── SKILL.md / TOOLS.md       # Agent 操作手册 / 项目速查
 ├── CLAUDE.md                 # Claude 上下文文件
 └── README.md                 # 本文件
 ```
