@@ -102,7 +102,7 @@ python scripts/cua_collect.py --schools "清华,北大"
 ## `cua_sync_jobs.py` -- 职位管理页同步岗位信息
 
 ```bash
-# 预览 + 自动写入 config/jobs.json（默认行为）
+# 提取 + 自动覆盖写入 config/jobs.json（默认行为）
 python scripts/cua_sync_jobs.py
 
 # 仅预览不写入

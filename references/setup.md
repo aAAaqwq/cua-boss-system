@@ -212,7 +212,7 @@ print(f'\n  {passed}/{len(checks)} 通过')
 
 ```bash
 # 1. 先 dry-run 预览，确认脚本行为正确
-python scripts/cua_sync_jobs.py             # 预览（自动写入）
+python scripts/cua_sync_jobs.py --dry-run   # 预览不写入
 python scripts/cua_collect.py --dry-run     # 预览收集
 python scripts/cua_chat_loop.py --dry-run   # 预览沟通
 

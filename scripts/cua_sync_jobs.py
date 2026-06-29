@@ -9,7 +9,8 @@
   4. 覆盖写入 jobs.json（替换旧数据，保留话术模板）
 
 用法:
-  python scripts/cua_sync_jobs.py              # 提取 + 自动写入 config/jobs.json
+  python scripts/cua_sync_jobs.py              # 提取 + 覆盖写入 config/jobs.json（默认）
+  python scripts/cua_sync_jobs.py --write      # 同上（--write 可省略，显式更清晰）
   python scripts/cua_sync_jobs.py --dry-run    # 仅预览不写入
   python scripts/cua_sync_jobs.py --limit 3    # 只处理前N个
 """
@@ -112,7 +113,9 @@ def scan_open_jobs(pid, wid):
         idx = int(m_idx.group(1))
         m = re.search(r'AXStaticText\s*=\s*"([^"]*)"', line)
         if m: items.append((idx, 'text', m.group(1))); continue
-        m = re.search(r'AXLink\s*\(\s*(.+?)\s*\)', line)
+        # 链接文本可能自带括号(如标签/前缀)；锚定行尾的 [actions 或行尾，
+        # 否则非贪婪 .+? 会在标题内第一个 ) 处截断(把「(标注)数据标注/AI训练师」截成「(标注」)
+        m = re.search(r'AXLink\s*\(\s*(.+?)\s*\)\s*(?:\[actions|$)', line)
         if m: items.append((idx, 'link', m.group(1).strip()))
     items.sort()
 
@@ -358,15 +361,29 @@ def extract_edit_page(pid, wid):
     return result
 
 
+# 开头的装饰性标签(BOSS/HR 列表常加: (标注)/（急聘）/【双休】/[包住] 等)。
+# 仅剥短标签(≤8字)，避免误伤把括号当正名一部分的岗位。支持中英文括号。
+_TAG_PREFIX_RE = re.compile(r"^\s*[\(（【\[][^\)）】\]]{1,8}[\)）】\]]\s*")
+
+
 def norm_title(title):
-    """规范化岗位名（折叠空白）——岗位名即唯一键，无独立 id 字段。
+    """规范化岗位名（折叠空白 + 剥离开头装饰性标签）——岗位名即唯一键，无独立 id 字段。
 
     不再生成英文 id：BOSS 真实 jobId 是加密哈希(不可读、不适合做话术/评分 key)，
     而岗位名本身唯一、可读，且与候选人聊天的 job_position 一致 →
     用岗位名让 chat↔job↔reply-templates↔scoring 四处天然对齐，无需任何映射。
     (BOSS 真实 jobId 仍由 extract_edit_page 尽力探测并存入 boss_id 字段备用。)
+
+    兼容性：列表页岗位名常带 (标注)/（急聘）等列表侧标签，而候选人侧 job_position、
+    话术/评分的 key 都不带 → 这里剥掉开头短标签，让四处 key 对齐(否则精确键查找落空)。
     """
-    return re.sub(r"\s+", " ", (title or "").strip())
+    t = re.sub(r"\s+", " ", (title or "").strip())
+    while True:
+        stripped = _TAG_PREFIX_RE.sub("", t).strip()
+        if stripped == t or not stripped:  # 无变化 / 不会剥成空 → 停
+            break
+        t = stripped
+    return t
 
 
 def dedup(jobs):
@@ -402,6 +419,8 @@ def load_existing_templates():
 def main():
     import argparse
     p = argparse.ArgumentParser()
+    p.add_argument("--write", action="store_true",
+                   help="显式写入（默认即提取+覆盖写入 config/jobs.json，此 flag 可省略）")
     p.add_argument("--dry-run", action="store_true", help="仅预览不写入")
     p.add_argument("--limit", type=int, default=0)
     args = p.parse_args()
@@ -556,7 +575,7 @@ def main():
         if reqs: print(f"      {reqs}")
 
     if args.dry_run:
-        print(f"\n⚠ 预览 — 未写入")
+        print(f"\n⚠ 预览 — 未写入（去掉 --dry-run 即覆盖写入 config/jobs.json）")
     else:
         CONFIG.write_text(json.dumps(jobs_config, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n✓ 已覆盖写入 {CONFIG}")

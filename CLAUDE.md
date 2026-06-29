@@ -157,8 +157,9 @@ python scripts/cua_collect.py --no-score   # 收集后不自动评分
 ### cua_sync_jobs.py — 职位管理页职位信息同步
 
 ```bash
-python scripts/cua_sync_jobs.py             # 预览
-python scripts/cua_sync_jobs.py --write     # 提取+写入
+python scripts/cua_sync_jobs.py             # 提取+覆盖写入(默认)
+python scripts/cua_sync_jobs.py --write     # 同上(--write 可省略)
+python scripts/cua_sync_jobs.py --dry-run   # 仅预览不写入
 python scripts/cua_sync_jobs.py --limit 3   # 调试
 ```
 
