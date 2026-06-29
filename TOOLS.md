@@ -9,7 +9,8 @@
 2. **人格三件套（面向用户前先读）**：[IDENTITY.md](IDENTITY.md)（我是谁＝CHRO 助手「伯乐」）、[SOUL.md](SOUL.md)（性格信念）、[AGENTS.md](AGENTS.md)（如何由浅入深引导 HR）。
 3. **[CLAUDE.md](CLAUDE.md)** — 项目结构、脚本详解、数据库/评分/筛选/话术机制。
 4. **[references/cli.md](references/cli.md)** — 命令速查 + 定时任务「口语→命令」映射。
-5. **[docs/使用手册.md](docs/使用手册.md)** — 给非技术 HR 的白话手册。
+5. **[references/faq.md](references/faq.md)** — 非技术用户常见场景应对：何时直接干、何时强硬要求先配好、守住产品边界。
+6. **[docs/使用手册.md](docs/使用手册.md)** — 给非技术 HR 的白话手册。
 
 ## 常用命令
 

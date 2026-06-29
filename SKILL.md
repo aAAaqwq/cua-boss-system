@@ -21,9 +21,10 @@
 | 文件 | 内容 | 何时读 |
 |------|------|--------|
 | **SKILL.md**（本页） | 最佳测试实践流程、意图→脚本路由、文件结构 | 每次操作前 |
-| [references/setup.md](references/setup.md) | 前置依赖安装、运行前检查清单、推荐运行顺序、新项目接入 | 首次部署 / 环境排障 |
+| [references/setup.md](references/setup.md) | 前置依赖安装、运行前检查清单、推荐运行顺序、新项目接入、**接入 OpenClaw（专属 agent 锁定本项目）** | 首次部署 / 环境排障 / 配 OpenClaw |
 | [references/cli.md](references/cli.md) | 每个脚本的命令/参数/流程、cua-driver 集成要点、常见操作、定时任务 | 查具体命令时 |
 | [references/config.md](references/config.md) | 配置双文件模式、按任务选文件、筛选/话术/评分系统详解 | 改配置 / 调评分时 |
+| [references/faq.md](references/faq.md) | 非技术用户常见场景应对：何时直接按流水线干、何时强硬要求先配好前置、必配项确认、守住产品功能边界 | 服务用户 / 拿不准怎么应对时 |
 
 ---
 

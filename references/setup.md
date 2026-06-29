@@ -297,3 +297,81 @@ python scripts/cua_sync_jobs.py
 # 检查候选人数据
 python scripts/query_db.py
 ```
+
+---
+
+## 接入 OpenClaw（专属 agent，锁定本项目 + 永远注入上下文）
+
+> 目标：让 OpenClaw 上有一个**专属招聘助手 agent「伯乐」**，它**永远以本项目为根**、每轮自动注入本项目上下文、操作不外溢到别的项目。
+> 原理：OpenClaw 用 **per-agent `workspace`** 字段决定 agent 的根目录，配合 `contextInjection:"always"` 每轮注入该根目录的引导文件（`AGENTS.md`/`CLAUDE.md`/`TOOLS.md`/`IDENTITY.md`/`SOUL.md`，本项目已就绪）。
+
+主配置：`~/.openclaw/openclaw.json`（平台核心配置，**改前务必备份**）。
+
+### 步骤 1 — 备份主配置
+
+```bash
+cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%Y%m%d-%H%M%S)
+```
+
+### 步骤 2 — 在 `agents.list` 新增「伯乐」agent（workspace 指向本项目）
+
+把下面这块加进 `~/.openclaw/openclaw.json` 的 `agents.list` 数组里（`model` 段照抄同文件其它 agent 的）：
+
+```jsonc
+{
+  "id": "bole",
+  "name": "伯乐",
+  "workspace": "/Users/danielli/.openclaw/workspace/projects/cua-boss-system",
+  "model": { "primary": "<照抄其它 agent>", "fallbacks": ["..."] },
+  "thinkingDefault": "high",
+  "identity": { "name": "伯乐", "theme": "BOSS直聘招聘自动化助手", "emoji": "🎯" },
+  "groupChat": { "mentionPatterns": ["伯乐","招聘","BOSS直聘","打招呼","收简历","候选人","约面试"] }
+}
+```
+
+- **`workspace` 指向项目目录** = 目录范围硬隔离（不碰别的项目）+ 上下文永远是本项目。
+- `agents.defaults.contextInjection` 须为 `"always"`（默认已是）。
+
+### 步骤 3 —（可选）命令层硬约束：`exec-approvals.json` 给伯乐设白名单
+
+编辑 `~/.openclaw/exec-approvals.json`，在 `agents` 下加（只放行本项目命令）：
+
+```jsonc
+"bole": {
+  "allowlist": [
+    { "pattern": "python scripts/*.py*" },
+    { "pattern": "python3 scripts/*.py*" }
+  ],
+  "askFallback": "ask",
+  "security": "restricted"
+}
+```
+
+> 这是「功能局限」的命令层硬约束；语义层（只聊招聘、不跑题）由项目 `references/faq.md` + `AGENTS.md` 负责。
+
+### 步骤 4 —（可选）绑定专属入口
+
+在 `openclaw.json` 的 `bindings` 加一条，把伯乐绑到某渠道账号（如 Telegram bot）：
+
+```jsonc
+{ "agentId": "bole", "match": { "channel": "telegram", "accountId": "bole" } }
+```
+
+### 步骤 5 — 校验 JSON + 重启生效
+
+```bash
+# 校验两个文件 JSON 合法（不合法别重启，先恢复备份）
+python3 -m json.tool ~/.openclaw/openclaw.json >/dev/null && echo "✓ openclaw.json OK"
+python3 -m json.tool ~/.openclaw/exec-approvals.json >/dev/null && echo "✓ exec-approvals.json OK"
+
+# 重启 OpenClaw 服务后，向「伯乐」发一句「跑一遍完整流程」验证它在本项目上下文内工作
+```
+
+### 能做到什么程度（诚实边界）
+
+| 你要的 | 机制 | 能否「完美」 |
+|--------|------|------------|
+| 永远知道是招聘系统 | `workspace`=项目 + `contextInjection:always` 注入项目引导文件 | ✅ 硬保证 |
+| 文件操作不外溢到别的项目 | per-agent `workspace` 根隔离 | ✅ 硬隔离 |
+| 只执行本项目命令 | `exec-approvals.json` allowlist | ✅ 命令层硬限 |
+| 只聊招聘、不跑题（语义） | `faq.md`/`AGENTS.md` 提示词 | ⚠️ 趋近，非 100%（LLM 本质） |
