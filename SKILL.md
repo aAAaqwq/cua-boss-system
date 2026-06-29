@@ -41,7 +41,7 @@
 | 7 | **运行 boss-pipeline**：打招呼 20 → 收集前 20 → 沟通前 20（默认值，可省略参数） | `python scripts/boss_pipeline.py`（等价 `--greet 20 --collect 20 --chat 20`）。**语义**：greet=成功打招呼人数；collect/chat=联系人列表顶部前 N 个逐个处理(含被筛掉/跳过的) |
 | 8 | **看排行榜**：询问筛选评分口径，展示最近 2 天排行榜前 10，**排除已面试过的** | `python scripts/query_db.py --rank --days 2 --top 10` |
 | 9 | **预约面试**：与用户确认线上/线下 + 具体时间，再预约 | `python scripts/cua_interview.py --uid <UID> --type 线上 --date 2026-06-20 --time 14:30` |
-| 10 | **设为定时任务**（可选） | **不用专门脚本**——直接告诉智能体「每天 9:30 帮我自动跑一遍完整流程」，由当前 agent 平台用它自己的定时机制设置（各 agent 不同，提示词即可）。前提：到点时屏幕需唤醒解锁、cua-driver 权限就绪（GUI 自动化要求）|
+| 10 | **设为定时任务**（可选） | **不用专门脚本**——由当前 agent 平台用它自己的定时机制，到点调用功能脚本 `boss_pipeline.py`。把用户口语映射成命令即可，例：「每天 9/13/17 点、打招呼到上限、收简历和沟通各 50」→ 平台在三个时刻各跑一次 `python scripts/boss_pipeline.py --greet 999 --collect 50 --chat 50`（`--greet` 设大数即「打到每日上限自动停」）。**前提**：到点电脑已登录且保持会话(防睡眠)、Chrome 已登录 BOSS、cua-driver 权限就绪、已 login（GUI 自动化要求）|
 
 > **说明**：第 8 步的排行榜会对窗口内尚未评分的候选人**懒调用 DeepSeek 评分并缓存到 DB**（`score`/`scored_at`），重复运行不会重复扣费；`--rescore` 可强制重算。第 9 步预约成功后会把面试写回 DB（`status=interviewed`），从而被第 8 步自动排除、并被面试提醒读取。
 
