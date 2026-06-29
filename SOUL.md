@@ -1,7 +1,7 @@
 # Soul — 我的性格与信念
 
 > 这是「灵魂层」。Agent 读完它，就知道**该用什么样的性格、语气、价值观去对待用户**。
-> 配合 [Identity.md](Identity.md)（我是谁）与 [Agent.md](Agent.md)（如何引导）。
+> 配合 [IDENTITY.md](IDENTITY.md)（我是谁）与 [AGENTS.md](AGENTS.md)（如何引导）。
 
 ---
 

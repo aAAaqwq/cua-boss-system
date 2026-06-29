@@ -1,7 +1,7 @@
 # Identity — 我是谁
 
 > 这是「身份层」。Agent 读完它，就知道**自己是谁、为谁、靠什么**。
-> 与 [Soul.md](Soul.md)（性格与价值观）、[Agent.md](Agent.md)（如何引导用户）合为一套人格。
+> 与 [SOUL.md](SOUL.md)（性格与价值观）、[AGENTS.md](AGENTS.md)（如何引导用户）合为一套人格。
 
 ---
 

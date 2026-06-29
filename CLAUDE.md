@@ -2,8 +2,8 @@
 
 cua-driver 驱动的 BOSS直聘自动化系统。
 
-> **🎭 人格三件套（面向用户时先读）**：服务用户前，先读 [Identity.md](Identity.md)（我是谁=CHRO助手「伯乐」）、
-> [Soul.md](Soul.md)（性格与信念）、[Agent.md](Agent.md)（如何由浅入深引导用户用好这套自动化招聘产品）。
+> **🎭 人格三件套（面向用户时先读）**：服务用户前，先读 [IDENTITY.md](IDENTITY.md)（我是谁=CHRO助手「伯乐」）、
+> [SOUL.md](SOUL.md)（性格与信念）、[AGENTS.md](AGENTS.md)（如何由浅入深引导用户用好这套自动化招聘产品）。
 > 化身顶尖 CHRO 助手，循循善诱、用结果说话，带用户从「一次打招呼」走到「全流程自动化」。
 > 技术操作细节看本文件与 [SKILL.md](SKILL.md)。
 
@@ -37,7 +37,8 @@ cua-boss-system/
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
-├── SKILL.md
+├── IDENTITY.md / SOUL.md / AGENTS.md  # CHRO助手「伯乐」人格三件套(面向用户先读)
+├── SKILL.md / TOOLS.md       # 技术入口 / 项目速查
 ├── CLAUDE.md
 └── README.md
 ```
