@@ -5,7 +5,8 @@
 取代独立的 boss-full-pipeline skill —— agent 读 SKILL.md 后直接调本脚本并按需调参。
 
 用法:
-  python scripts/boss_pipeline.py                          # 打招呼20 / 收集5 / 沟通5(默认)
+  python scripts/boss_pipeline.py                          # 打招呼20 / 收集20 / 沟通20(默认)
+  python scripts/boss_pipeline.py --greet max --collect 50 --chat 50  # 打招呼到上限 + 收/聊各50
   python scripts/boss_pipeline.py --greet 100 --collect 30 --chat 30
   python scripts/boss_pipeline.py --min-degree 硕士 --schools "清华,北大"
   python scripts/boss_pipeline.py --dry-run                 # 全程预览不操作
@@ -21,6 +22,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCRIPTS = PROJECT_ROOT / "scripts"
+# 让 `python scripts/boss_pipeline.py` 能 import app.*（与各子脚本一致；
+# 否则 require_account 的 `from app.cloud_sync import ...` 会 ModuleNotFoundError）
+sys.path.insert(0, str(PROJECT_ROOT))
 
 TO_LIMIT_WORDS = {"max", "上限", "不限", "满", "顶"}
 
@@ -37,6 +41,17 @@ def parse_limit(value: str) -> int:
             f"--greet 需为正整数或 max/上限，收到: {value!r}")
     if n < 0:
         raise argparse.ArgumentTypeError("--greet 不能为负")
+    return n
+
+
+def non_negative_int(value: str) -> int:
+    """--collect/--chat：非负整数（0=该步不处理任何人）。"""
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"需为非负整数，收到: {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError("不能为负")
     return n
 
 
@@ -69,10 +84,10 @@ def main() -> None:
                    help="打招呼步骤的 --limit：成功打招呼的人数(非读卡片数)，"
                         "不符合筛选的会自动跳过并多翻卡片直到打满，默认 20；"
                         "填 max/上限/0 = 打到每日上限自动停")
-    p.add_argument("--collect", type=int, default=20,
+    p.add_argument("--collect", type=non_negative_int, default=20,
                    help="收集步骤的 --limit：从聊天联系人列表【顶部往下处理的联系人个数】"
                         "(含被筛掉/无简历跳过的，按列表顺序前 N 个)，默认 20")
-    p.add_argument("--chat", type=int, default=20,
+    p.add_argument("--chat", type=non_negative_int, default=20,
                    help="沟通步骤的 --limit：从聊天联系人列表【顶部往下审查的联系人个数】"
                         "(含被筛掉/已回复/跳过的，按列表顺序前 N 个)，默认 20")
     p.add_argument("--min-degree", help="最低学历(本科/硕士/博士)，传给各步骤")
