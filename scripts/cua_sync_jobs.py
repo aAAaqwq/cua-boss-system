@@ -36,18 +36,80 @@ NAV_LINKS = {
     "关闭","编辑","1","2","直播招聘","道具 首充礼",
 }
 
-def cua(*args):
+def cua(*args, _retries=2):
+    """调用 cua-driver；超时 / 瞬时失败自动重试，提升跨机稳定性(不再因单次超时崩溃)。"""
     cmd = ["cua-driver", "call"] + list(args)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if r.returncode != 0: return {}
-    try: return json.loads(r.stdout.strip() or "{}")
-    except json.JSONDecodeError: return {"text": (r.stdout or "")[:200]}
+    for attempt in range(_retries + 1):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            if attempt < _retries:
+                time.sleep(1.0); continue
+            return {}
+        except FileNotFoundError:
+            print("❌ 未找到 cua-driver，请确认已安装且在 PATH"); sys.exit(1)
+        if r.returncode != 0:
+            if attempt < _retries:
+                time.sleep(0.8); continue
+            return {}
+        try:
+            return json.loads(r.stdout.strip() or "{}")
+        except json.JSONDecodeError:
+            return {"text": (r.stdout or "")[:200]}
+    return {}
 
 
 def ax_tree(pid, wid):
     return cua("get_window_state", json.dumps({
         "pid": pid, "window_id": wid, "capture_mode": "ax"
     })).get("tree_markdown", "")
+
+
+def stable_ax_tree(pid, wid, want=None, tries=5):
+    """抓 AX 树并等它「就绪/稳定」——缓解渲染时序导致的跨机识别不稳。
+
+    want(tree)->bool：满足即返回(如「含编辑按钮」)；否则渐进退避重试，
+    最终回退到最后一次非空结果(交由上层容错)。
+    """
+    last = ""
+    for i in range(tries):
+        t = ax_tree(pid, wid)
+        if t and len(t) >= 200:
+            if want is None or want(t):
+                return t
+            last = t
+        time.sleep(0.6 + 0.4 * i)
+    return last
+
+
+# ── AX 序列化格式容错 ──
+# 不同 cua-driver / Chrome / macOS 版本对 AX 节点的写法不一：
+#   AXLink (文本)  |  AXLink "文本"  |  AXLink = "文本"  ；StaticText 同理。
+# 统一用下面两个 helper 抽取，避免「换台机器就识别不到」。
+def _ax_role_text(line, roles):
+    rolepat = "|".join(roles)
+    # 引号形式: AXLink "x" / AXLink = "x"
+    m = re.search(rf'AX(?:{rolepat})\b\s*(?:=\s*)?"([^"]+)"', line)
+    if m:
+        return m.group(1).strip()
+    # 括号形式: AXLink (x) [actions...]（锚定 [ 或行尾，标题含括号也不截断）
+    m = re.search(rf'AX(?:{rolepat})\b\s*\(\s*(.+?)\s*\)\s*(?:\[|$)', line)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _ax_link_text(line):
+    return _ax_role_text(line, ("Link", "Button", "MenuItem"))
+
+
+def _ax_static_text(line):
+    return _ax_role_text(line, ("StaticText",))
+
+
+_EDIT_LABELS = {"编辑", "编辑职位", "编辑岗位"}
+_STATUS_OPEN = "开放中"
+_STATUS_LABELS = {"开放中", "关闭", "待开放"}
 
 
 def find_window():
@@ -90,77 +152,100 @@ def nav_to(url, pid, wid, check_fn, timeout=25):
 
 
 def has_edit_links(pid, wid):
-    return len(re.findall(r'AXLink\s*\(\s*编辑\s*\)', ax_tree(pid, wid))) >= 1
+    tree = ax_tree(pid, wid)
+    return any((_ax_link_text(ln) or "") in _EDIT_LABELS for ln in tree.split("\n"))
 
 
 def has_textarea(pid, wid):
     return 'AXTextArea' in ax_tree(pid, wid)
 
 
-def scan_open_jobs(pid, wid):
-    """扫描列表页: 返回开放中 + 去重的岗位 [{title, edit_index}]
+def _is_job_title(val):
+    """判断 AXLink 文本是否是岗位名"""
+    if not val or val in NAV_LINKS: return False
+    if val in _EDIT_LABELS or val in ('关闭', '打开', '下线', '上线'): return False
+    if not re.search(r'[一-鿿]', val): return False           # 必须含中文
+    if re.match(r'^沟通\s*\d*$', val): return False
+    if val in _STATUS_LABELS: return False
+    return len(val) >= 2
+
+
+def _parse_open_jobs(tree):
+    """从 AX 树文本解析「开放中」岗位 → [{title, edit_index}]（格式容错）。
 
     每张卡片真实结构（岗位名在编辑前面!）:
       [80] AXLink(开发) [86] 16-30K ... [94] 开放中 [96] AXLink(编辑)
+    用 _ax_link_text/_ax_static_text 兼容 括号/引号/等号 三种序列化写法。
     """
-    tree = ax_tree(pid, wid)
-    lines = tree.split("\n")
-
     items = []
-    for line in lines:
+    for line in tree.split("\n"):
         m_idx = re.search(r'\[(\d+)\]', line)
         if not m_idx: continue
         idx = int(m_idx.group(1))
-        m = re.search(r'AXStaticText\s*=\s*"([^"]*)"', line)
-        if m: items.append((idx, 'text', m.group(1))); continue
-        # 链接文本可能自带括号(如标签/前缀)；锚定行尾的 [actions 或行尾，
-        # 否则非贪婪 .+? 会在标题内第一个 ) 处截断(把「(标注)数据标注/AI训练师」截成「(标注」)
-        m = re.search(r'AXLink\s*\(\s*(.+?)\s*\)\s*(?:\[actions|$)', line)
-        if m: items.append((idx, 'link', m.group(1).strip()))
+        st = _ax_static_text(line)
+        if st is not None:
+            items.append((idx, 'text', st)); continue
+        lk = _ax_link_text(line)
+        if lk is not None:
+            items.append((idx, 'link', lk))
     items.sort()
 
-    # 状态机: 跟踪 current_title → current_status → 编辑
-    jobs = []
-    seen_titles = set()
-    current_title = None
-    current_status = None
-
-    def is_job_title(val):
-        """判断 AXLink 文本是否是岗位名"""
-        if val in NAV_LINKS: return False
-        if val in ('编辑', '关闭', '打开'): return False
-        if not re.search(r'[一-鿿]', val): return False
-        if re.match(r'^沟通\s*\d*$', val): return False
-        return len(val) >= 2
-
+    # 状态机: current_title → current_status → 编辑
+    jobs, seen_titles = [], set()
+    current_title = current_status = None
     for idx, typ, val in items:
-        # 岗位名 AXLink
-        if typ == 'link' and is_job_title(val):
+        if typ == 'link' and _is_job_title(val):
             current_title = val
-            current_status = None  # 重置状态，等下一个
-            continue
-
-        # 状态标记（开放中/关闭/待开放）
-        if typ == 'text' and val in ('开放中', '关闭', '待开放'):
-            current_status = val
-            continue
-
-        # 编辑按钮 → 配对!
-        if typ == 'link' and val == '编辑':
-            if current_title and current_status == '开放中':
-                # 用 StaticText 版全名（取标题 AXLink 后面那个同名 StaticText）
-                full_title = current_title
-                if current_title not in seen_titles:
-                    seen_titles.add(current_title)
-                    jobs.append({"title": full_title, "edit_index": idx})
-            current_title = None
             current_status = None
             continue
-
-        # 关闭/打开按钮 → 复位
-        if typ == 'link' and val in ('关闭', '打开'):
+        if typ == 'text' and val in _STATUS_LABELS:
+            current_status = val
             continue
+        if typ == 'link' and val in _EDIT_LABELS:      # 编辑按钮 → 配对
+            if current_title and current_status == _STATUS_OPEN and current_title not in seen_titles:
+                seen_titles.add(current_title)
+                jobs.append({"title": current_title, "edit_index": idx})
+            current_title = current_status = None
+            continue
+        if typ == 'link' and val in ('关闭', '打开', '下线', '上线'):
+            continue
+    return jobs
 
+
+def scan_open_jobs(pid, wid):
+    """扫描列表页开放中岗位；抓不到就重试(渲染时序/跨机 AX 不稳的容错)。"""
+    jobs = []
+    for attempt in range(3):
+        tree = stable_ax_tree(pid, wid, want=lambda t: any(
+            (_ax_link_text(ln) or "") in _EDIT_LABELS for ln in t.split("\n")))
+        jobs = _parse_open_jobs(tree)
+        if jobs:
+            return jobs
+        time.sleep(1.0)
+    return jobs  # 仍为空 → 交由上层兜底(取全部编辑按钮)
+
+
+def parse_editable_jobs(tree):
+    """容错兜底：状态检测失败时，把每个「编辑」按钮与其【前面最近的岗位名链接】配对，
+    不看开放中/关闭状态 → 至少能同步到所有可编辑岗位(宁可多同步，不漏)。"""
+    jobs, seen = [], set()
+    last_title = None
+    items = []
+    for line in tree.split("\n"):
+        m_idx = re.search(r'\[(\d+)\]', line)
+        if not m_idx: continue
+        idx = int(m_idx.group(1))
+        lk = _ax_link_text(line)
+        if lk is not None:
+            items.append((idx, lk))
+    items.sort()
+    for idx, val in items:
+        if _is_job_title(val):
+            last_title = val
+        elif val in _EDIT_LABELS and last_title and last_title not in seen:
+            seen.add(last_title)
+            jobs.append({"title": last_title, "edit_index": idx})
+            last_title = None
     return jobs
 
 
@@ -169,7 +254,7 @@ def extract_edit_page(pid, wid):
 
     AX 树在 iframe 内容上会截断 → 职位描述用 JS 直接读 textarea.value
     """
-    tree = ax_tree(pid, wid)
+    tree = stable_ax_tree(pid, wid, want=lambda t: ("薪资范围" in t or "AXTextArea" in t))
     result = {
         "title": "", "requirements": "", "salary": "",
         "degree": "", "location": "", "experience": "", "boss_id": "",
@@ -187,7 +272,7 @@ def extract_edit_page(pid, wid):
 
     for line in tree.split("\n"):
         # AXTextField — location
-        m = re.search(r'AXTextField\s*=\s*"([^"]+)"', line)
+        m = re.search(r'AXTextField\s*(?:=\s*)?"([^"]+)"', line)
         if m and m.group(1) and "zhipin.com" not in m.group(1) and "/" not in m.group(1):
             val = m.group(1)
             if 2 <= len(val) < 30: text_fields.append(val)
@@ -195,30 +280,30 @@ def extract_edit_page(pid, wid):
                 result["location"] = val
 
         # 学历 — AXStaticText 精确匹配
-        m = re.search(r'AXStaticText\s*=\s*"(博士|硕士|本科|大专)"', line)
+        m = re.search(r'AXStaticText\s*(?:=\s*)?"(博士|硕士|本科|大专)"', line)
         if m and not result["degree"]:
             result["degree"] = m.group(1)
 
         # 经验
-        m = re.search(r'AXStaticText\s*=\s*"([^"]*[年应届].*)"', line)
+        m = re.search(r'AXStaticText\s*(?:=\s*)?"([^"]*[年应届].*)"', line)
         if m and not result["experience"]:
             val = m.group(1)
             if val not in ("1", "2", "职位管理", "招聘规范", "推荐牛人"):
                 result["experience"] = val
 
         # 薪资区域: 只取第一个 "薪资范围" 块（页面有重复的预览副本）
-        if not in_salary_section and not salary_done and re.search(r'AXStaticText\s*=\s*"薪资范围"', line):
+        if not in_salary_section and not salary_done and re.search(r'AXStaticText\s*(?:=\s*)?"薪资范围"', line):
             in_salary_section = True
             continue
         if in_salary_section:
             # 遇到边界标志则结束第一个薪资块
-            m_bound = re.search(r'AXStaticText\s*=\s*"([^"]+)"', line)
+            m_bound = re.search(r'AXStaticText\s*(?:=\s*)?"([^"]+)"', line)
             if m_bound and m_bound.group(1) in SALARY_BOUNDARY:
                 in_salary_section = False
                 salary_done = True
                 continue
             # 只收集薪资相关的 AXStaticText
-            m_st = re.search(r'AXStaticText\s*=\s*"([^"]+)"', line)
+            m_st = re.search(r'AXStaticText\s*(?:=\s*)?"([^"]+)"', line)
             if m_st:
                 val = m_st.group(1)
                 # K 格式: "40k", "55k"
@@ -447,31 +532,22 @@ def main():
     open_jobs = scan_open_jobs(pid, wid)
 
     # 也统计关闭的
-    tree = ax_tree(pid, wid)
-    closed_count = len(re.findall(r'AXStaticText\s*=\s*"关闭"', tree))
+    tree = stable_ax_tree(pid, wid)
+    closed_count = len(re.findall(r'AXStaticText\s*(?:=\s*)?"关闭"', tree))
 
     if not open_jobs:
-        # 兜底: 如果状态检测失败，退化为取所有编辑
-        all_edits = []
-        for line in tree.split("\n"):
-            m = re.search(r'\[(\d+)\].*AXLink\s*\(\s*编辑\s*\)', line)
-            if m: all_edits.append(int(m.group(1)))
-        print(f"  ⚠ 状态检测失败，取全部 {len(all_edits)} 个编辑按钮")
-        # 取唯一的，用岗位名去重
-        # 简化: 直接取前N个编辑（跳过重复）
-        items = []
-        for line in tree.split("\n"):
-            m = re.search(r'\[(\d+)\].*AXLink\s*\(\s*((?!编辑|关闭|沟通|职位管理|推荐牛人|搜索|意向沟通|互动|牛人管理|道具|工具箱|更多|直聘企业版|招聘规范|投递保|直播招聘|道具 首充礼)[^)]+)\s*\)', line)
-            if m: items.append(m.group(2).strip())
+        # 容错兜底: 状态检测失败 → 按「编辑」按钮配最近标题，宁多同步不漏
+        open_jobs = parse_editable_jobs(tree)
+        if open_jobs:
+            print(f"  ⚠ 状态检测失败，回退：按编辑按钮取 {len(open_jobs)} 个岗位(不分状态)")
+        else:
+            print("  ❌ 未识别到任何可编辑岗位。请确认 Chrome 已在「职位管理」页并已渲染，"
+                  "刷新后重试。"); sys.exit(1)
     else:
         print(f"  开放中: {len(open_jobs)} 个 | 关闭: ~{closed_count} 个")
 
-    # 如果有 open_jobs，用 open_jobs；否则从 all_edits 构建
-    if open_jobs:
-        total = len(open_jobs) if not args.limit else min(len(open_jobs), args.limit)
-        targets = open_jobs[:total]
-    else:
-        print("  ❌ 无开放中岗位"); sys.exit(1)
+    total = len(open_jobs) if not args.limit else min(len(open_jobs), args.limit)
+    targets = open_jobs[:total]
 
     for j in targets[:5]:
         print(f"    [{j['edit_index']:>4}] {j['title']}")
