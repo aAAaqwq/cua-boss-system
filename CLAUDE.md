@@ -34,7 +34,9 @@ cua-boss-system/
 │   ├── cua_interview.py        # 预约面试(选线上/线下+日期+时间，成功后写回DB)
 │   ├── interview_reminder.py   # 面试提醒(读DB已约面试，可发macOS通知，纯读不操作Chrome)
 │   ├── query_db.py             # 数据库查询/统计/CSV导出 + --rank评分排行榜
-│   └── parse_resume.py         # PDF简历转文字(主路径解析器)+批量回填DB正文(--backfill)
+│   ├── parse_resume.py         # PDF简历转文字(主路径解析器)+批量回填DB正文(--backfill)
+│   ├── bole.py                 # 和「伯乐」对话(DeepSeek驱动, app/bole_agent.py)；--ask/--json 供桌面App
+│   └── doctor.py               # 装机自检(前置就绪体检, --json 供App首次引导)
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
