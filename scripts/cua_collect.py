@@ -15,7 +15,7 @@
   python scripts/cua_collect.py --limit 10           # 前10个
   python scripts/cua_collect.py --min-degree 硕士    # 学历筛选
 """
-import json, sqlite3, subprocess, sys, time, re, random, os, urllib.request, shutil
+import base64, json, sqlite3, subprocess, sys, time, re, random, os, urllib.request, shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -413,8 +413,45 @@ def _pick_candidate_file(files: list, name: str):
     return big_enough[0], "unverified"
 
 
+def _fetch_pdf_via_page(pid, wid, pdf_url: str) -> bytes | None:
+    """【最可靠】在已登录的 Chrome 页面上下文里用同步 XHR 取 PDF 字节。
+
+    为什么最稳：XHR 跑在正在渲染这份预览的【同一个登录会话】里，cookie/session
+    自动带上 → 不会像 urllib 那样拿到登录页；且【不依赖】Chrome 下载机制 / ~/Downloads
+    目录。用 overrideMimeType('...x-user-defined') 取原始二进制 → btoa 转 base64 回传。
+    返回 PDF bytes，失败返回 None（大文件 base64 回传若被截断会校验 %PDF- 失败而降级）。
+    """
+    safe = pdf_url.replace("\\", "\\\\").replace("'", "\\'")
+    js = (
+        "JSON.stringify((function(){try{"
+        "var x=new XMLHttpRequest();x.open('GET','" + safe + "',false);"
+        "x.overrideMimeType('text/plain; charset=x-user-defined');x.send();"
+        "if(x.status!==200)return{ok:false,status:x.status};"
+        "var r=x.responseText,s='';for(var i=0;i<r.length;i++)s+=String.fromCharCode(r.charCodeAt(i)&255);"
+        "return{ok:true,b64:btoa(s),size:r.length};"
+        "}catch(e){return{ok:false,err:''+e};}})())"
+    )
+    res = cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js,
+    }))
+    if not isinstance(res, dict) or not res.get("ok") or not res.get("b64"):
+        return None
+    try:
+        data = base64.b64decode(res["b64"])
+    except Exception:
+        return None
+    if data[:5] != b"%PDF-" or len(data) < 1024:   # 截断/限流/登录页 → 降级
+        return None
+    return data
+
+
 def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
-    """从 BOSS PDF 预览中提取下载 URL 并触发浏览器下载
+    """从 BOSS PDF 预览中提取下载 URL 并把 PDF 落盘到 data/resumes/
+
+    下载链路（任一层失败自动降级，不短路）：
+      ① 页面内同步 XHR 鉴权下载（最可靠，直接写 data/resumes/，不碰 ~/Downloads）
+      ② Chrome 原生下载 → 轮询下载目录 → 防串档/校验 → 拷贝
+      ③ urllib 直连（最后兜底，无登录态多半失败）
 
     Chrome 内嵌 PDF viewer 的工具栏（下载按钮）对 macOS Accessibility API
     完全不可见，无法通过 AX 树定位。实际方案：从 PDF viewer iframe 的
@@ -481,8 +518,20 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
         ts = datetime.now().strftime("%H%M%S")
         dest = RESUMES_DIR / f"{safe_name}_{ts}{ext}"
 
-    # 策略1: JS 触发 Chrome 下载 (a.click) -> 从 ~/Downloads 拷贝
-    dl_dir = Path.home() / "Downloads"
+    # ── 策略0（首选, 最可靠）: 页面内同步 XHR 鉴权下载 → 直接写 data/resumes/ ──
+    data = _fetch_pdf_via_page(pid, wid, pdf_url)
+    if data:
+        try:
+            dest.write_bytes(data)
+            print(f"    📥 附件下载(页面鉴权): {dest.name} ({len(data):,} bytes)")
+            time.sleep(random.uniform(3, 6))   # 节流, 规避限流
+            return str(dest)
+        except OSError as e:
+            print(f"    ⚠ 页面下载写盘失败({e})，转其他方式")
+
+    # 策略1: JS 触发 Chrome 下载 (a.click) -> 从下载目录拷贝
+    # 下载目录默认 ~/Downloads，可用 BOSS_CHROME_DOWNLOAD_DIR 覆盖（若改过 Chrome 下载位置）
+    dl_dir = Path(os.environ.get("BOSS_CHROME_DOWNLOAD_DIR", str(Path.home() / "Downloads")))
     before = set(str(p) for p in dl_dir.iterdir()) if dl_dir.exists() else set()
 
     safe_pdf_url = pdf_url.replace("'", "\\'")
@@ -529,12 +578,12 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
         src, verdict = _pick_candidate_file(done, name)
         if src is None:
             if verdict == "too_small":
-                # 新下载文件均过小 → 疑似 BOSS 限流 JSON，宁可不存也不污染评分
-                print(f"    ⚠ 下载文件均过小(疑似限流), 跳过本地保存")
+                # 新下载文件均过小 → 疑似 BOSS 限流 JSON，不取它，转直连兜底
+                print(f"    ⚠ 下载文件均过小(疑似限流), 转直连兜底")
             else:
-                # 可读 PDF 都不含本人姓名 → 疑似别人的下载，宁可不存也不串档
-                print(f"    ⚠ 新下载文件均不含「{name}」(疑似串档), 跳过本地保存")
-            return None
+                # 可读 PDF 都不含本人姓名 → 疑似别人的下载，不取它，转直连兜底
+                print(f"    ⚠ 新下载文件均不含「{name}」(疑似串档), 转直连兜底")
+            break
         if verdict == "unverified" and len(done) > 1:
             print(f"    ⚠ 无法核验下载归属(图片PDF/Quartz不可用), 取最新一个")
         # 拷贝前再核验 src：限流 JSON 可能被存成 .pdf，按 PDF 魔术字节 + 体积兜底拦截
@@ -543,17 +592,16 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
                 head = fh.read(5)
             src_size = src.stat().st_size
         except OSError as e:
-            print(f"    ⚠ 附件读取失败({e}), 跳过本地保存")
-            return None
+            print(f"    ⚠ 附件读取失败({e}), 转直连兜底")
+            break
         if head != b"%PDF-" or src_size < 1024:
-            print(f"    ⚠ 下载文件非PDF/过小(疑似限流), 跳过保存")
-            return None
+            print(f"    ⚠ 下载文件非PDF/过小(疑似限流), 转直连兜底")
+            break
         try:
             shutil.copy2(str(src), str(dest))
         except (FileNotFoundError, OSError) as e:
-            # 拷贝失败不应中断整轮收集：简历正文已在上游提取并入库
-            print(f"    ⚠ 附件拷贝失败({e}), 跳过本地保存")
-            return None
+            print(f"    ⚠ 附件拷贝失败({e}), 转直连兜底")
+            break
         sz = src.stat().st_size if src.exists() else 0
         print(f"    📥 附件下载: {dest} ({sz:,} bytes)")
         time.sleep(random.uniform(3, 6))  # 下载节流，规避 BOSS 限流
