@@ -10,9 +10,11 @@
 
 用法:
   python scripts/cua_sync_jobs.py              # 提取 + 覆盖写入 config/jobs.json（默认）
-  python scripts/cua_sync_jobs.py --write      # 同上（--write 可省略，显式更清晰）
+  python scripts/cua_sync_jobs.py --merge      # 追加/合并：按岗位名 upsert，未扫到的保留不删
   python scripts/cua_sync_jobs.py --dry-run    # 仅预览不写入
   python scripts/cua_sync_jobs.py --limit 3    # 只处理前N个
+
+注：DOM 降级模式（AX 失效兜底）岗位名可靠性较低，会【自动转合并】避免误名覆盖丢数据。
 """
 import json
 import subprocess
@@ -696,17 +698,59 @@ def load_existing_templates():
     return {}, []
 
 
+def load_existing_jobs():
+    """读旧 jobs.json 的完整 jobs 列表（合并/追加模式用）。"""
+    if CONFIG.exists():
+        try:
+            return json.loads(CONFIG.read_text(encoding="utf-8")).get("jobs", [])
+        except Exception:
+            pass
+    return []
+
+
+def merge_jobs(existing, new):
+    """按岗位名(title) upsert 合并：新扫到的更新同名项；未扫到的【保留】，不删除。
+
+    返回 (合并后列表, 新增数, 更新数, 保留数)。同名且新项无话术时，沿用旧项话术。
+    """
+    by_title, order = {}, []
+    for j in existing:
+        t = j.get("title", "")
+        if t and t not in by_title:
+            by_title[t] = j; order.append(t)
+    added = updated = 0
+    new_titles = set()
+    for nj in new:
+        t = nj.get("title", "")
+        if not t:
+            continue
+        new_titles.add(t)
+        old = by_title.get(t)
+        if old:
+            if old.get("templates") and not nj.get("templates"):
+                nj["templates"] = old["templates"]   # 同名保留已配话术
+            updated += 1
+        else:
+            order.append(t); added += 1
+        by_title[t] = nj
+    kept = len([t for t in order if t not in new_titles])
+    return [by_title[t] for t in order], added, updated, kept
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--write", action="store_true",
                    help="显式写入（默认即提取+覆盖写入 config/jobs.json，此 flag 可省略）")
     p.add_argument("--dry-run", action="store_true", help="仅预览不写入")
+    p.add_argument("--merge", action="store_true",
+                   help="追加/合并模式：按岗位名 upsert，未扫到的岗位【保留不删】"
+                        "（防漏扫/误名覆盖丢数据）。默认是覆盖。")
     p.add_argument("--limit", type=int, default=0)
     args = p.parse_args()
 
     print("=" * 60)
-    print("BOSS岗位提取 — 仅开放中 + 去重 + 覆盖")
+    print(f"BOSS岗位提取 — 仅开放中 + 去重 + {'合并(追加,不删未扫到的)' if args.merge else '覆盖'}")
     print("=" * 60)
 
     if "running" not in str(cua("status")).lower():
@@ -822,14 +866,32 @@ def main():
         if key in old_templates:
             j["templates"] = old_templates[key]
 
+    # 合并 vs 覆盖：DOM 降级模式岗位名不够可靠 → 自动转合并，防误名覆盖丢数据
+    existing_jobs = load_existing_jobs()
+    auto_merge = _DOM_MODE and existing_jobs
+    merge_mode = args.merge or auto_merge
+
+    if merge_mode:
+        final_jobs, added, updated, kept = merge_jobs(existing_jobs, extracted)
+        why = "（DOM 降级模式自动启用合并，防误名覆盖）" if auto_merge and not args.merge else ""
+        write_note = f"合并写入{why}：新增 {added} / 更新 {updated} / 保留 {kept}"
+    else:
+        final_jobs = extracted
+        write_note = f"覆盖写入：{len(final_jobs)} 个岗位"
+        # 覆盖会丢失未扫到的岗位 → 数量下降时强提醒
+        if existing_jobs and len(extracted) < len(existing_jobs):
+            print(f"\n  ⚠ 本次只扫到 {len(extracted)} 个，少于现有 {len(existing_jobs)} 个！"
+                  f"覆盖将【丢失】未扫到的 {len(existing_jobs)-len(extracted)} 个岗位。"
+                  f"\n     若因 AX 不稳/漏扫，请改用 --merge 追加（保留旧岗位）。")
+
     jobs_config = {
         "version": 3,
         "description": "BOSS直聘岗位配置 — 从职位管理页自动同步",
-        "jobs": extracted,
+        "jobs": final_jobs,
         "fallback_templates": fallback,
     }
 
-    print(f"\n  {len(extracted)} 个岗位:")
+    print(f"\n  本次扫到 {len(extracted)} 个岗位:")
     for j in extracted:
         salary = j.get("salary") or "?"
         degree = j.get("degree") or "?"
@@ -840,10 +902,10 @@ def main():
         if reqs: print(f"      {reqs}")
 
     if args.dry_run:
-        print(f"\n⚠ 预览 — 未写入（去掉 --dry-run 即覆盖写入 config/jobs.json）")
+        print(f"\n⚠ 预览 — 未写入。将{write_note}（去掉 --dry-run 生效）")
     else:
         CONFIG.write_text(json.dumps(jobs_config, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"\n✓ 已覆盖写入 {CONFIG}")
+        print(f"\n✓ 已{write_note} → {CONFIG}")
 
 
 if __name__ == "__main__":

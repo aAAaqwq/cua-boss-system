@@ -105,12 +105,20 @@ python scripts/cua_collect.py --schools "清华,北大"
 # 提取 + 自动覆盖写入 config/jobs.json（默认行为）
 python scripts/cua_sync_jobs.py
 
+# 追加/合并：按岗位名 upsert，未扫到的岗位【保留不删】（防漏扫/误名覆盖丢数据）
+python scripts/cua_sync_jobs.py --merge
+
 # 仅预览不写入
 python scripts/cua_sync_jobs.py --dry-run
 
 # 只处理前 N 个
 python scripts/cua_sync_jobs.py --limit 3
 ```
+
+> **覆盖 vs 合并**：默认**覆盖**（jobs.json 整体替换为本次扫到的，仅按 title+salary 保留话术）。
+> 担心漏扫/误名（尤其 AX 不稳时）就用 `--merge` 追加，旧岗位不会被删。
+> **DOM 降级模式**（AX 失效兜底，岗位名可靠性较低）会**自动转合并**，避免误名覆盖丢数据。
+> 覆盖模式下若本次扫到数 < 现有数，会**强提醒**可能丢岗位、建议改 `--merge`。
 
 **流程**：进入职位管理页 -> 扫描"开放中"岗位（同名去重）-> 逐个点编辑提取：
 - `title`：AXTextField（最短中文）
