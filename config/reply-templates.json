@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "话术提示词模板 — 三层匹配：岗位专属(jobs.<岗位名>) → 类别(categories.tech/nontech) → 全局兜底(fallback)。命中后作为 DeepSeek「建议回复方向」，AI 结合上下文重写；DeepSeek 不可用时降级为 reply 原文。运行时优先读本地 reply.json，不存在则用本文件兜底。",
+  "description": "话术提示词模板 — 三层匹配：岗位专属(jobs.<岗位名>) → 类别(categories.tech/nontech) → 全局兜底(fallback)。命中后作为 DeepSeek「建议回复方向」，AI 结合上下文重写；DeepSeek 不可用时降级为 reply 原文。运行时优先读本地 reply.json，不存在则用本文件兜底。话术原则：简短自然、推进对话、针对岗位、用结果说话、不重复问已知信息。",
   "_fields": {
     "id": "模板唯一标识（同一分组内唯一）",
     "name": "模板用途说明（人类可读，不参与匹配逻辑）",
@@ -16,90 +16,145 @@
   "categories": {
     "tech": [
       {
-        "id": "cat_tech_example",
-        "name": "示例·问技术栈（技术岗通用）",
-        "match_keywords": [
-          "技术栈",
-          "框架",
-          "语言",
-          "微服务",
-          "数据库"
-        ],
-        "reply": "我们用主流框架 + AI 工具提效，技术栈按项目选型。你最擅长哪个方向？",
+        "id": "tech_stack",
+        "name": "问技术栈/框架/语言",
+        "match_keywords": ["技术栈", "框架", "语言", "微服务", "数据库", "架构", "中间件"],
+        "reply": "我们技术栈按项目选型、用 AI 工具提效，不堆轮子。你最拿手哪个方向？正好对一下契合度。",
         "priority": 1
+      },
+      {
+        "id": "tech_project",
+        "name": "问项目/团队/规模",
+        "match_keywords": ["项目", "团队", "多少人", "规模", "做什么产品"],
+        "reply": "团队不大但事儿实、决策快、能落地。你最近做的哪个项目最能代表你的水平？讲讲。",
+        "priority": 2
+      },
+      {
+        "id": "tech_schedule",
+        "name": "问作息/加班",
+        "match_keywords": ["加班", "作息", "几点", "双休", "996", "弹性", "工作时间"],
+        "reply": "重结果不重打卡，节奏看项目阶段，不搞形式加班。你这边对作息有什么偏好？直说没关系。",
+        "priority": 3
+      },
+      {
+        "id": "tech_salary",
+        "name": "问薪资/待遇",
+        "match_keywords": ["薪资", "工资", "待遇", "多少钱", "package", "调薪"],
+        "reply": "薪资 {salary}，按面试评估定级，技术强的可上浮。你目前期望大概在什么区间？",
+        "priority": 4
       }
     ],
     "nontech": [
       {
-        "id": "cat_nontech_example",
-        "name": "示例·问业务方向（非技术岗通用）",
-        "match_keywords": [
-          "业务",
-          "方向",
-          "职责",
-          "负责"
-        ],
-        "reply": "这个岗位主要负责{title}相关的工作，你过往哪段经历最相关？",
+        "id": "nontech_duty",
+        "name": "问业务/职责/方向",
+        "match_keywords": ["业务", "方向", "职责", "负责", "工作内容", "做什么"],
+        "reply": "这个岗位主要负责{title}相关的事，核心看拿结果。你过往哪段经历最相关？对一下。",
         "priority": 1
+      },
+      {
+        "id": "nontech_comp",
+        "name": "问提成/绩效/底薪",
+        "match_keywords": ["提成", "绩效", "底薪", "奖金", "上不封顶"],
+        "reply": "底薪 + 绩效，做得好上不封顶。你更看重稳定底薪还是高弹性提成？我帮你算笔账。",
+        "priority": 2
+      },
+      {
+        "id": "nontech_growth",
+        "name": "问发展/晋升",
+        "match_keywords": ["发展", "晋升", "成长", "空间", "前景"],
+        "reply": "岗位跟着业务一起长，空间不设上限、肯干就给舞台。你接下来一两年最想突破什么？",
+        "priority": 3
       }
     ]
   },
   "jobs": {
-    "后端开发工程师（示例）": [
+    "示例岗位（复制此块改成你的岗位名）": [
       {
         "id": "example_greeting",
-        "name": "示例·打招呼/问候",
-        "match_keywords": [
-          "你好",
-          "您好",
-          "hi",
-          "hello",
-          "在吗"
-        ],
-        "reply": "你好！看了你的简历，方便聊聊你最近做的项目和技术方向吗？",
+        "name": "示例·候选人打招呼",
+        "match_keywords": ["你好", "您好", "hi", "hello", "在吗"],
+        "reply": "你好！看了你的背景挺合适，方便聊聊你最近做的项目和方向吗？",
         "priority": 1
       },
       {
         "id": "example_salary",
         "name": "示例·问薪资",
-        "match_keywords": [
-          "薪资",
-          "工资",
-          "待遇",
-          "多少钱"
-        ],
-        "reply": "薪资范围 {salary}，具体看面试评估。你目前期望大概在什么区间？",
+        "match_keywords": ["薪资", "工资", "待遇", "多少钱"],
+        "reply": "薪资 {salary}，具体看面试评估。你目前期望大概在什么区间？",
         "priority": 2
       },
       {
         "id": "example_job_fallback",
         "name": "示例·该岗位兜底（空关键词=保底）",
         "match_keywords": [],
-        "reply": "我们在招{title}，薪资{salary}，工作地点{location}。方便聊聊看吗？",
+        "reply": "我们在招{title}，薪资{salary}，地点{location}。方便聊聊看吗？",
         "priority": 99
       }
     ]
   },
   "fallback": [
     {
-      "id": "fallback_greeting",
+      "id": "fb_greeting",
       "name": "候选人主动打招呼",
-      "match_keywords": [
-        "你好",
-        "您好",
-        "hi",
-        "hello",
-        "在吗",
-        "请问"
-      ],
-      "reply": "你好！我们在招{title}，你在做哪个方向的？聊聊看有没有契合的点～",
+      "match_keywords": ["你好", "您好", "hi", "hello", "在吗", "请问"],
+      "reply": "你好！我们在招{title}，你主要做哪个方向的？聊两句看看契合点～",
       "priority": 1
     },
     {
-      "id": "fallback_default",
+      "id": "fb_salary",
+      "name": "问薪资/待遇",
+      "match_keywords": ["薪资", "工资", "待遇", "多少钱", "package", "底薪"],
+      "reply": "薪资 {salary}，具体按面试评估定。你目前的期望区间大概是多少？",
+      "priority": 2
+    },
+    {
+      "id": "fb_location",
+      "name": "问地点/远程/通勤",
+      "match_keywords": ["地点", "在哪", "远程", "居家", "通勤", "上班", "办公"],
+      "reply": "办公在 {location}；到岗或远程都能聊，你倾向哪种？我看看怎么安排。",
+      "priority": 3
+    },
+    {
+      "id": "fb_duty",
+      "name": "问职责/做什么",
+      "match_keywords": ["做什么", "职责", "方向", "负责", "工作内容", "岗位"],
+      "reply": "主要负责{title}相关的事。你过往哪段经历最接近？对一下看看合不合适。",
+      "priority": 4
+    },
+    {
+      "id": "fb_schedule",
+      "name": "问作息/加班",
+      "match_keywords": ["加班", "作息", "几点", "双休", "996", "弹性", "工作时间"],
+      "reply": "重结果、不搞形式加班，节奏随项目走。你对作息有偏好直接说，咱们坦诚。",
+      "priority": 5
+    },
+    {
+      "id": "fb_interested",
+      "name": "候选人表达感兴趣 → 要简历/作品",
+      "match_keywords": ["感兴趣", "可以", "想了解", "详细", "介绍下", "了解一下"],
+      "reply": "好，我把岗位细节同步给你；也方便发份最新简历/作品我先看看吗？看完更好给你针对性介绍。",
+      "priority": 6
+    },
+    {
+      "id": "fb_interview",
+      "name": "推进约面",
+      "match_keywords": ["面试", "聊聊", "方便", "电话", "微信", "约时间"],
+      "reply": "那要不约个时间细聊？你看这两天哪个时段方便，线上线下都行。",
+      "priority": 7
+    },
+    {
+      "id": "fb_hesitate",
+      "name": "候选人犹豫/再考虑（不硬推，留门）",
+      "match_keywords": ["考虑", "再看看", "想想", "暂时", "先这样", "观望"],
+      "reply": "理解，你可以先慢慢了解。有任何顾虑随时问我，我尽量给你交底。",
+      "priority": 8
+    },
+    {
+      "id": "fb_default",
       "name": "全局兜底（空关键词=最后保底回复）",
       "match_keywords": [],
-      "reply": "收到～方便的话我们约个时间细聊？",
+      "reply": "收到～方便的话我们约个时间细聊？你先说说最看重的点，我针对性介绍。",
       "priority": 99
     }
   ],
