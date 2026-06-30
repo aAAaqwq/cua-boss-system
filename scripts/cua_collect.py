@@ -504,13 +504,12 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     if not pdf_url:
         return None
 
-    # 构造安全文件名
+    # 构造安全文件名。
+    # ★ 固定 .pdf：BOSS 预览/下载 URL(preview4boss)给的【始终是 PDF】，三条下载策略也都
+    #   按 %PDF- 魔术字节校验。原先用候选人简历原名后缀(可能 .docx/.doc)→ 把 PDF 字节存成
+    #   .docx(后缀与内容不符)。这里一律 .pdf（filename 仅留作来源参考，不决定后缀）。
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
     ext = ".pdf"
-    if filename:
-        m = re.search(r'\.(\w+)$', filename)
-        if m:
-            ext = f".{m.group(1)}"
     dest = RESUMES_DIR / f"{safe_name}{ext}"
 
     # 去重: 已有同名文件则加时间戳
