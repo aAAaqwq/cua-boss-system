@@ -33,7 +33,8 @@ cua-boss-system/
 │   ├── cua_sync_jobs.py        # 职位管理页同步岗位信息
 │   ├── cua_interview.py        # 预约面试(选线上/线下+日期+时间，成功后写回DB)
 │   ├── interview_reminder.py   # 面试提醒(读DB已约面试，可发macOS通知，纯读不操作Chrome)
-│   └── query_db.py             # 数据库查询/统计/CSV导出 + --rank评分排行榜
+│   ├── query_db.py             # 数据库查询/统计/CSV导出 + --rank评分排行榜
+│   └── parse_resume.py         # PDF简历转文字(主路径解析器)+批量回填DB正文(--backfill)
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
@@ -149,6 +150,13 @@ python scripts/cua_collect.py --no-score   # 收集后不自动评分
 > 与打招呼的 `--limit`(=成功打招呼人数)语义不同，勿混淆。
 
 流程: 进入聊天页 → AX树扫描联系人 → 逐个审查 → 提取uid+简历+微信 → upsert到candidates.db → **采集结束后实时评分**
+
+**简历获取（主路径=PDF附件，AX提取=降级）**:
+- **下载在 Escape 之前**：`_capture_open_pdf` 趁 PDF 预览打开就先 `_download_attachment` 落盘到 `data/resumes/`，再 AX 提取文本/回退在线简历——根治「打开了附件却没下载」（原先文本不足时先 Escape 关预览，导致后续找不到可见 iframe 下不到）。
+- **下载链路**：①页面内同步 XHR 鉴权下载(同会话 cookie，直写 data/resumes，最可靠) → ②Chrome 原生下载 → ③urllib，任一层失败逐层降级不短路。
+- **正文主路径**：有 PDF 就 `extract_resume_from_pdf`(文本层→OCR) 解析入库；AX 提取仅在 PDF 解析为空时降级用。
+- **「已采集」判定**：以 **PDF 文件是否已落盘且存在**(`resume_path`+文件在)为准，**不**用提取的文字判断；DB 有正文但无 PDF 文件 → 仍补下载附件。
+- **回填**：`python scripts/parse_resume.py --backfill` 对「有 PDF 但 DB 无正文」的行重新解析补齐。
 
 **收集后实时评分（默认开，`--no-score` 关）**: Chrome 采集循环结束后，对本轮收集到、有简历正文的 uid 调 `auto_score_candidates()` → `evaluate_candidate_auto` + `record_score`，与 `query_db --rank` 同一路径同一缓存（score/score_summary/scored_at）。放在循环外批量做（不拖 Chrome 会话），best-effort（评分异常不影响采集与已入库数据）。看排行榜时分数已就绪，`--rank` 仍可刷新/重算。
 

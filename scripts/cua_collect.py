@@ -811,7 +811,40 @@ def _read_wechat_for(name: str, tree: str) -> str:
     return ""
 
 
-def click_attachment_resume(pid, wid, name=""):
+def _capture_open_pdf(pid, wid, name, filename="", do_download=False):
+    """PDF 预览【已打开】时统一处理：**先趁预览开着把 PDF 下载落盘**，再 AX 提取文本。
+
+    关键修复：原先若 AX 文本提取不足会先按 Escape 关掉预览再回退在线简历，导致随后
+    `_download_attachment` 找不到「可见的 PDF 预览 iframe」→ 附件下不到（「打开了却没下载」）。
+    现在把下载放到 Escape 之前——只要预览打开过，附件必先落盘。
+    返回 (resume_content, resume_path)。
+    """
+    _wait_pdf_ready(pid, wid)
+    # ① 先下载(必须在 Escape 之前；之后回退会关预览就下不到了)
+    resume_path = ""
+    if do_download:
+        try:
+            resume_path = _download_attachment(pid, wid, name, filename) or ""
+        except Exception as e:
+            print(f"    ⚠ 附件下载异常({e})")
+    # ② 滚动渲染 + AX 提取文本
+    for _ in range(3):
+        cua("scroll", json.dumps({"pid": pid, "window_id": wid,
+                                   "direction": "down", "amount": 5}))
+        time.sleep(1)
+    resume_content = extract_resume_text(pid, wid, name)
+    # ③ AX 文本不足 → Escape 关预览, 回退在线简历区(此时附件已在 ① 落盘)
+    if not resume_content or len(resume_content) <= 50:
+        print(f"    → PDF 文本提取不足, 回退在线简历...")
+        cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
+        time.sleep(2)
+        online = extract_resume_text(pid, wid, name)
+        if online and len(online) > len(resume_content or ""):
+            resume_content = online
+    return resume_content, resume_path
+
+
+def click_attachment_resume(pid, wid, name="", filename="", do_download=False):
     """点击附件简历并根据返回状态处理
 
     修正后的流程:
@@ -865,31 +898,11 @@ def click_attachment_resume(pid, wid, name=""):
 
     # ── Step 1: PDF 预览弹出 → Case-1: 已发附件简历 ──
     if 'AXWebArea' in tree and 'PDF' in tree:
-        ready = _wait_pdf_ready(pid, wid)
-        if not ready:
-            print(f"    → 简历(Case-1): PDF 加载超时")
-        # 滚动 PDF 确保渲染完整内容（BOSS PDF 预览只渲染可视区域）
-        for _ in range(3):
-            cua("scroll", json.dumps({"pid": pid, "window_id": wid,
-                                       "direction": "down", "amount": 5}))
-            time.sleep(1)
-        resume_content = extract_resume_text(pid, wid, name)
-
-        # PDF 提取失败 → 回退到在线简历
-        if not resume_content or len(resume_content) <= 50:
-            print(f"    → PDF 提取不足, 回退在线简历...")
-            cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
-            time.sleep(2)
-            resume_content = extract_resume_text(pid, wid, name)
-            if resume_content and len(resume_content) > 50:
-                print(f"    → 简历(Case-1→在线): 提取 {len(resume_content)} 字")
-            elif resume_content:
-                print(f"    → 简历(Case-1→在线): 仅 {len(resume_content)} 字")
-            else:
-                print(f"    → 简历(Case-1→在线): 也为空")
-        else:
-            print(f"    → 简历(Case-1): 已发附件, 提取 {len(resume_content)} 字")
-        return {"case": "case-1", "resume_content": resume_content, "action": "extract"}
+        resume_content, resume_path = _capture_open_pdf(pid, wid, name, filename, do_download)
+        print(f"    → 简历(Case-1): 提取 {len(resume_content)} 字"
+              + (", 附件已下载" if resume_path else (", 附件未下载" if do_download else "")))
+        return {"case": "case-1", "resume_content": resume_content,
+                "action": "extract", "resume_path": resume_path}
 
     # ── Step 2: "索取简历"确认弹窗 → Case-2: 已沟通未发简历 ──
     if '向牛人请求简历' in tree:
@@ -901,29 +914,12 @@ def click_attachment_resume(pid, wid, name=""):
         # 确认后检查 PDF 是否打开
         tree2 = ax_tree(pid, wid)
         if 'AXWebArea' in tree2 and 'PDF' in tree2:
-            _wait_pdf_ready(pid, wid)
-            for _ in range(3):
-                cua("scroll", json.dumps({"pid": pid, "window_id": wid,
-                                           "direction": "down", "amount": 5}))
-                time.sleep(1)
-            resume_content = extract_resume_text(pid, wid, name)
-
-            # PDF 提取失败 → 回退在线简历
-            if not resume_content or len(resume_content) <= 50:
-                print(f"    → PDF 提取不足, 回退在线简历...")
-                cua("press_key", json.dumps({"pid": pid, "window_id": wid, "key": "escape"}))
-                time.sleep(2)
-                resume_content = extract_resume_text(pid, wid, name)
-                if resume_content and len(resume_content) > 50:
-                    print(f"    → 简历(Case-2→在线): 提取 {len(resume_content)} 字")
-                elif resume_content:
-                    print(f"    → 简历(Case-2→在线): 仅 {len(resume_content)} 字")
-                else:
-                    print(f"    → 简历(Case-2→在线): 也为空")
-            else:
-                print(f"    → 简历(Case-2→Case-1): 索取后提取 {len(resume_content)} 字")
-            return {"case": "case-2", "resume_content": resume_content, "action": "extract"}
-        return {"case": "case-2", "resume_content": "", "action": "request"}
+            resume_content, resume_path = _capture_open_pdf(pid, wid, name, filename, do_download)
+            print(f"    → 简历(Case-2→已发): 提取 {len(resume_content)} 字"
+                  + (", 附件已下载" if resume_path else (", 附件未下载" if do_download else "")))
+            return {"case": "case-2", "resume_content": resume_content,
+                    "action": "extract", "resume_path": resume_path}
+        return {"case": "case-2", "resume_content": "", "action": "request", "resume_path": ""}
 
     # ── Step 3: 以上都不满足 → 全部跳过 ──
     if '附件简历请求中' in tree:
@@ -1330,56 +1326,64 @@ def main():
             stats["unsuitable"] += 1
         else:
             resume_content = ""
-            # 检查DB是否已有简历(>200字才是有效简历)
-            existing_resume = None
+            resume_action = ""
+            resume_path = ""
+
+            # 「已采集」以【PDF 附件文件是否已落盘且存在】为准——不再用提取的文字判断。
+            # 主路径=从 PDF 附件解析文字入库；AX 直接提取仅作降级。
+            existing_path = existing_text = ""
             if conn:
                 if contact_uid:
                     row = conn.execute(
-                        "SELECT resume_content FROM candidates WHERE uid=?",
+                        "SELECT resume_path, resume_content FROM candidates WHERE uid=?",
                         (contact_uid,)).fetchone()
                 else:
                     row = conn.execute(
-                        "SELECT resume_content FROM candidates WHERE name=? AND job_position=?",
+                        "SELECT resume_path, resume_content FROM candidates WHERE name=? AND job_position=?",
                         (name, job)).fetchone()
-                if row and row[0]:
-                    existing_resume = row[0]
+                if row:
+                    existing_path = row[0] or ""
+                    existing_text = row[1] or ""
 
-            resume_action = ""
-            if existing_resume:
-                resume_content = existing_resume
-                print(f"    → 简历: 已存在({len(resume_content)}字), 跳过提取")
+            have_pdf = bool(existing_path) and Path(existing_path).exists()
+            if have_pdf:
+                resume_path = existing_path
+                print(f"    → 简历PDF已存在，跳过下载: {existing_path}")
             else:
-                result = click_attachment_resume(pid, wid, name)
-                resume_content = result.get("resume_content", "")
+                if existing_path:
+                    print(f"    ⚠ DB记录的简历PDF已丢失，重新下载: {existing_path}")
+                elif existing_text:
+                    print(f"    → DB有正文但无PDF附件，补下载附件")
+                # 附件下载在 click_attachment_resume 内（趁 PDF 预览打开、Escape 之前）完成
+                result = click_attachment_resume(
+                    pid, wid, name,
+                    filename=panel.get("resume_filename", ""),
+                    do_download=(not args.dry_run),
+                )
+                resume_content = result.get("resume_content", "")   # AX 提取(降级用)
                 resume_action = result.get("action", "")
-
-            # 附件下载 + PDF 直解析。
-            # 关键修正: 下载不再以 AX 是否提到正文为前提——只要 PDF 可得(action=extract)
-            # 就下载，再用 Quartz 直接解析 PDF 文件(比 AX 树更可靠)。这样即便 AX 提取为空
-            # (李艳萍即此例: PDF 已下载到 data/ 但 AX 提取失败、正文未入库)也能补回正文。
-            resume_path = ""
-            if not args.dry_run and not existing_resume and resume_action == "extract":
-                try:
-                    resume_path = _download_attachment(
-                        pid, wid, name,
-                        filename=panel.get("resume_filename", ""),
-                    ) or ""
-                except Exception as e:
-                    print(f"    ⚠ 附件下载异常({e})")
-                    resume_path = ""
+                resume_path = result.get("resume_path", "")
                 if resume_path:
-                    print(f"    ✓ 附件已保存: {resume_path}")
-                    # PDF 解析: 文本层优先, 扫描件/图片型自动 OCR; 校验姓名后取更完整的一份
-                    pdf_text, src = extract_resume_from_pdf(resume_path, expected_name=name)
-                    tag = "OCR" if src == "ocr" else "直解析"
-                    if pdf_text and len(pdf_text) >= len(resume_content):
-                        if len(resume_content) == 0:
-                            print(f"    📄 PDF {tag}补回正文: {len(pdf_text)} 字 (AX 提取为空)")
-                        else:
-                            print(f"    📄 PDF {tag}: {len(pdf_text)} 字 (优于 AX {len(resume_content)} 字, 采用)")
-                        resume_content = pdf_text
-                    elif pdf_text:
-                        print(f"    📄 PDF {tag} {len(pdf_text)} 字 (AX {len(resume_content)} 字更全, 保留 AX)")
+                    print(f"    ✓ 附件PDF已落盘: {resume_path}")
+                elif resume_action == "extract":
+                    print(f"    ⚠ 附件预览已打开但未能下载到PDF（见上日志）")
+
+            # ── 主路径: 从 PDF 附件解析文字入库；AX 提取仅作降级 ──
+            if have_pdf and existing_text and len(existing_text) > 50:
+                resume_content = existing_text
+                print(f"    → 简历正文已存在({len(resume_content)}字)，复用")
+            elif resume_path and Path(resume_path).exists():
+                pdf_text, src = extract_resume_from_pdf(resume_path, expected_name=name)
+                tag = "OCR" if src == "ocr" else "直解析"
+                if pdf_text and len(pdf_text) > 50:
+                    if pdf_text != resume_content:
+                        extra = f"（弃用 AX 降级文本 {len(resume_content)} 字）" if resume_content else ""
+                        print(f"    📄 PDF {tag}入库[主路径]: {len(pdf_text)} 字{extra}")
+                    resume_content = pdf_text
+                elif resume_content:
+                    print(f"    ⚠ PDF 解析不足({len(pdf_text or '')}字)，降级用 AX 提取 {len(resume_content)} 字")
+                else:
+                    print(f"    ⚠ PDF 解析与 AX 提取均为空")
 
             # 微信: 已交换→提取微信号, 可换→点换微信→确认, DB已有→跳过
             wechat_id = ""
