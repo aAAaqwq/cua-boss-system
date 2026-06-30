@@ -937,6 +937,23 @@ def click_attachment_resume(pid, wid, name="", filename="", do_download=False):
     return {"case": "unknown", "resume_content": "", "action": "skip"}
 
 
+def _looks_like_pdf_blob(text: str) -> bool:
+    """判断文本是否是 PDF 原始字节/结构（而非简历正文）。
+
+    AX 树偶尔会把 Chrome PDF 阅读器里 PDF 的头（%PDF-1.7）/对象流当成 AXStaticText 抓出来，
+    这种「正文」喂给 DeepSeek 评分会得 0.0。命中则视为提取失败、丢弃。
+    """
+    if not text:
+        return False
+    head = text.lstrip()[:16]
+    if head.startswith("%PDF-") or head.startswith("%%EOF"):
+        return True
+    markers = ("endobj", "stream\n", "/Type", "xref", "trailer", "/Font", " obj")
+    if sum(1 for m in markers if m in text) >= 3:
+        return True
+    return False
+
+
 def extract_resume_text(pid, wid, expected_name: str = ""):
     """从 PDF 附件预览区域提取文本; 无 PDF 则回退到在线简历区域
 
@@ -977,6 +994,9 @@ def extract_resume_text(pid, wid, expected_name: str = ""):
         if val in ('~', '~~', '-', '--'): continue
         # 哈希 token
         if re.match(r'^[a-f0-9]{20,}~*$', val): continue
+        # PDF 原始字节/结构(AX 偶尔把 PDF 头/流当文本抓出来) → 跳过
+        if val.startswith('%PDF-') or val.startswith('%%EOF') or re.match(r'^\d+\s+\d+\s+obj\b', val):
+            continue
         # 短名混入（但不排除候选人自己的姓名）
         if re.match(r'^[一-鿿a-zA-Z]{2,4}$', val) and val != expected_name: continue
         # 关键词
@@ -1010,6 +1030,10 @@ def extract_resume_text(pid, wid, expected_name: str = ""):
         text_parts = merged
 
     result = "\n".join(text_parts)
+
+    # ── 兜底: 整体若是 PDF 原始字节/结构(非正文) → 判为提取失败, 让上游走 PDF 解析 ──
+    if _looks_like_pdf_blob(result):
+        return ""
 
     # ── 校验: PDF 内容是否属于当前候选人 ──
     if expected_name and result and len(expected_name) >= 2:
@@ -1368,7 +1392,8 @@ def main():
                     print(f"    ⚠ 附件预览已打开但未能下载到PDF（见上日志）")
 
             # ── 主路径: 从 PDF 附件解析文字入库；AX 提取仅作降级 ──
-            if have_pdf and existing_text and len(existing_text) > 50:
+            if (have_pdf and existing_text and len(existing_text) > 50
+                    and not _looks_like_pdf_blob(existing_text)):
                 resume_content = existing_text
                 print(f"    → 简历正文已存在({len(resume_content)}字)，复用")
             elif resume_path and Path(resume_path).exists():

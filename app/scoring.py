@@ -228,13 +228,28 @@ def build_candidate_data(row) -> dict:
     return {k: _get(k) for k in _CANDIDATE_FIELDS}
 
 
+def _looks_like_pdf_blob(text: str) -> bool:
+    """resume_content 是否是 PDF 原始字节/结构(非正文)——喂给 DeepSeek 会得 0.0，应判为无内容。"""
+    if not text:
+        return False
+    head = text.lstrip()[:16]
+    if head.startswith("%PDF-") or head.startswith("%%EOF"):
+        return True
+    markers = ("endobj", "stream\n", "/Type", "xref", "trailer", "/Font", " obj")
+    return sum(1 for m in markers if m in text) >= 3
+
+
 def has_resume_content(candidate_data: dict) -> bool:
-    """候选人是否有简历附件内容（评分前置条件）。
+    """候选人是否有【有效】简历正文（评分前置条件）。
 
     简历附件是评分的主要依据，无内容则不评分。仅看 resume_content 实际文本，
     不依赖 has_resume 标志位（标志位可能为真但抓取内容为空）。
+    若内容是 PDF 原始字节/结构（AX 抓取 bug 残留），视为无内容，跳过评分而非给 0.0。
     """
-    return bool((candidate_data.get("resume_content") or "").strip())
+    content = (candidate_data.get("resume_content") or "").strip()
+    if not content or _looks_like_pdf_blob(content):
+        return False
+    return True
 
 
 def _normalize_chat(chat_history) -> list[dict]:
