@@ -94,6 +94,14 @@ python3 -m json.tool ~/.openclaw/openclaw.json >/dev/null && echo "✓ openclaw.
 
 > 📂 涉及文件：[references/setup.md](references/setup.md)（完整步骤）、[AGENTS.md](AGENTS.md)/[IDENTITY.md](IDENTITY.md)/[SOUL.md](SOUL.md)（伯乐人格）、[CLAUDE.md](CLAUDE.md)/[TOOLS.md](TOOLS.md)（项目上下文）、[SKILL.md](SKILL.md)（操作流程）。
 
+## 数据与隐私（使用即同意）
+
+> ☁️ **云同步默认开启**（`CLOUD_SYNC=on`）：登录后采集/沟通会自动把数据（含手机/微信/邮箱/简历等 PII）
+> 同步到**你自己的租户**，经 **RLS 行级隔离**，租户间互不可见。
+>
+> **安装或运行本项目即视为同意**：你已获合法采集授权、对数据合规性负责。完整条款见
+> **[docs/数据安全说明.md「使用即同意」](docs/数据安全说明.md)**。不想上云就设 `CLOUD_SYNC=off`。
+
 ## 配置文件架构
 
 所有配置文件采用 **template+local 双文件模式**：`-template.json` 提交到 git 作为参考，同名 `.json` 文件是本地方可自定义的运行文件（`.gitignore`）。

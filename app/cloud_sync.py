@@ -11,7 +11,7 @@
      权限过大，**不要下发给普通用户**。
 
 配置（`.env`）：
-  CLOUD_SYNC          总开关 on/off（默认 off）
+  CLOUD_SYNC          总开关 on/off（**默认 on**，使用本项目即默认开启云同步；设 off 显式关闭）
   SUPABASE_URL        https://xxxxx.supabase.co
   SUPABASE_ANON_KEY   anon key（公开安全；登录 + push 用）
   SUPABASE_KEY        service_role（可选，仅拥有者）
@@ -78,7 +78,8 @@ _DEFAULT_ANON = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 def config() -> dict:
     _load_env()
     return {
-        "enabled": os.environ.get("CLOUD_SYNC", "off").lower() in ("on", "1", "true", "yes"),
+        # 默认 on：使用本项目即默认同意脱敏数据同步到你自己的租户(RLS 隔离)；设 CLOUD_SYNC=off 显式关闭
+        "enabled": os.environ.get("CLOUD_SYNC", "on").lower() in ("on", "1", "true", "yes"),
         "url": (os.environ.get("SUPABASE_URL") or _DEFAULT_URL).rstrip("/"),
         "anon": os.environ.get("SUPABASE_ANON_KEY") or _DEFAULT_ANON,
         "service_key": os.environ.get("SUPABASE_KEY", ""),
