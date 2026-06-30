@@ -65,7 +65,7 @@ def ax_tree(pid, wid):
     })).get("tree_markdown", "")
 
 
-def stable_ax_tree(pid, wid, want=None, tries=5):
+def stable_ax_tree(pid, wid, want=None, tries=4):
     """抓 AX 树并等它「就绪/稳定」——缓解渲染时序导致的跨机识别不稳。
 
     want(tree)->bool：满足即返回(如「含编辑按钮」)；否则渐进退避重试，
@@ -112,6 +112,160 @@ _STATUS_OPEN = "开放中"
 _STATUS_LABELS = {"开放中", "关闭", "待开放"}
 
 
+# ══════════════════════════════════════════════════
+# 兜底：AX 识别失败时走 DOM(JS) 定位 + CGEvent 真鼠标点击(isTrusted=true，防检测)
+# 坐标换算与 boss_click_buheshi 同(实测正确)；CGEvent 像素点击需 Chrome 前台。
+# ══════════════════════════════════════════════════
+
+def _activate_chrome_front():
+    """把 Chrome 带到前台——CGEvent 像素点击要求目标窗口可见/前台，否则点击落空。"""
+    try:
+        subprocess.run(["osascript", "-e", 'tell application "Google Chrome" to activate'],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    time.sleep(0.3)
+
+
+def _run_js(pid, wid, js):
+    """执行 JS（须 return JSON.stringify(...)）→ 解析为 dict；失败返回 None。"""
+    r = cua("page", json.dumps({
+        "pid": pid, "window_id": wid, "action": "execute_javascript", "javascript": js,
+    }))
+    if isinstance(r, str):
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(r, dict):
+        if "ok" in r:
+            return r
+        if "text" in r:                       # cua() 解码失败兜底包了一层
+            try:
+                return json.loads(r["text"])
+            except Exception:
+                return None
+    return None
+
+
+def _screenshot_dims(pid, wid):
+    st = cua("get_window_state", json.dumps({
+        "pid": pid, "window_id": wid, "capture_mode": "screenshot",
+    }))
+    return st.get("screenshot_width"), st.get("screenshot_height")
+
+
+def _cgclick_rect(rect, pid, wid):
+    """CSS rect → 截图像素 → cua-driver CGEvent 真鼠标点击 {x,y}（isTrusted=true）。
+
+    scale = 截图宽 / 视口宽；顶部浏览器 chrome = 截图高 − 视口高×scale。需 Chrome 前台。
+    """
+    sw, sh = _screenshot_dims(pid, wid)
+    if not sw or not sh or not rect.get("iw"):
+        return False
+    scale = sw / rect["iw"]
+    chrome_top = sh - rect["ih"] * scale
+    cgx = int((rect["x"] + rect["w"] / 2) * scale)
+    cgy = int((rect["y"] + rect["h"] / 2) * scale + chrome_top)
+    r = cua("click", json.dumps({"pid": pid, "window_id": wid, "x": cgx, "y": cgy}))
+    return not (isinstance(r, dict) and r.get("error"))
+
+
+# ── DOM(JS) 扫描：完全不依赖 AX 树 ──
+# BOSS 职位列表在 iframe 内 → 必须遍历同源 iframe 文档；坐标要加 iframe 偏移转成顶层视口坐标。
+_JS_DOCS = (
+    "function _docs(){var d=[document];var f=document.querySelectorAll('iframe');"
+    "for(var i=0;i<f.length;i++){try{if(f[i].contentDocument)d.push(f[i].contentDocument);}"
+    "catch(e){}}return d;}"
+    "function _off(D){if(D===document)return{x:0,y:0};var f=document.querySelectorAll('iframe');"
+    "for(var i=0;i<f.length;i++){try{if(f[i].contentDocument===D){var r=f[i].getBoundingClientRect();"
+    "return{x:r.left,y:r.top};}}catch(e){}}return{x:0,y:0};}"
+)
+
+_JS_DOM_SCAN = (
+    "(function(){" + _JS_DOCS + "var out=[],seen={};"
+    "_docs().forEach(function(D){"
+    "var btns=[].slice.call(D.querySelectorAll('a,button,span,div'))"
+    ".filter(function(e){var r=e.getBoundingClientRect();"
+    "return (e.textContent||'').trim()==='编辑'&&r.width>0&&r.height>0;});"
+    "btns.forEach(function(ed){var card=ed,title='',open=null;"
+    "for(var k=0;k<8&&card;k++){card=card.parentElement;if(!card)break;"
+    "var cands=[].slice.call(card.querySelectorAll('a,h1,h2,h3,span'))"
+    ".map(function(x){return (x.textContent||'').trim();})"
+    ".filter(function(t){return t.length>=2&&t.length<=40&&/[\\u4e00-\\u9fa5]/.test(t)"
+    "&&!{'编辑':1,'打开':1,'关闭':1,'下线':1,'上线':1,'置顶':1,'刷新':1,'推广':1,"
+    "'删除':1,'复制':1,'立即沟通':1,'沟通':1,'开放中':1,'待开放':1,'已关闭':1}[t]"
+    "&&t.indexOf('开放中')<0&&t.indexOf('关闭')<0&&t.indexOf('待开放')<0"
+    "&&t.indexOf('沟通')!==0;});"
+    "if(cands.length){title=cands[0];var ct=card.textContent||'';"
+    "open=(ct.indexOf('开放中')>=0)?true:((ct.indexOf('关闭')>=0)?false:null);break;}}"
+    "if(title&&!seen[title]){seen[title]=1;out.push({title:title,open:open});}});});"
+    "return JSON.stringify({ok:true,jobs:out});})()"
+)
+
+_JS_EDIT_RECT = (
+    "(function(){var T='__TITLE__';" + _JS_DOCS + "var DD=_docs();"
+    "for(var di=0;di<DD.length;di++){var D=DD[di];"
+    "var all=[].slice.call(D.querySelectorAll('a,span,div,h1,h2,h3')),te=null;"
+    "for(var i=0;i<all.length;i++){if((all[i].textContent||'').trim()===T){te=all[i];break;}}"
+    "if(!te)continue;var card=te;"
+    "for(var k=0;k<8&&card;k++){"
+    "var b=[].slice.call(card.querySelectorAll('a,button,span,div'))"
+    ".filter(function(e){return (e.textContent||'').trim()==='编辑';});"
+    "if(b.length){var r=b[0].getBoundingClientRect(),o=_off(D);"
+    "if(r.width>0&&r.height>0)return JSON.stringify({ok:true,x:r.left+o.x,y:r.top+o.y,"
+    "w:r.width,h:r.height,iw:window.innerWidth,ih:window.innerHeight});}"
+    "card=card.parentElement;}}return JSON.stringify({ok:false});})()"
+)
+
+_JS_HAS_EDIT = (
+    "(function(){" + _JS_DOCS + "var n=0;_docs().forEach(function(D){"
+    "n+=[].slice.call(D.querySelectorAll('a,button,span,div')).filter(function(e){"
+    "return (e.textContent||'').trim()==='编辑';}).length;});"
+    "return JSON.stringify({ok:true,n:n});})()"
+)
+
+_JS_HAS_TEXTAREA = (
+    "(function(){" + _JS_DOCS + "var n=0;_docs().forEach(function(D){"
+    "try{n+=D.querySelectorAll('textarea').length;}catch(e){}});"
+    "return JSON.stringify({ok:true,n:n});})()"
+)
+
+
+def dom_scan_edit_buttons(pid, wid):
+    """JS DOM 扫描可编辑岗位(AX 无关) → [{title}]（去重、按 DOM 顺序）。
+
+    优先返回检测到「开放中」的岗位；若 DOM 里状态完全测不出(全 unknown)，
+    则返回所有可编辑岗位(宁多不漏，绝不因状态测不出而同步到空)。
+    """
+    r = _run_js(pid, wid, _JS_DOM_SCAN)
+    if not (isinstance(r, dict) and r.get("ok")):
+        return []
+    jobs = [j for j in r.get("jobs", []) if j.get("title")]
+    open_jobs = [j for j in jobs if j.get("open") is True]
+    return open_jobs if open_jobs else jobs
+
+
+def cgclick_edit_by_title(title, pid, wid):
+    """按岗位名在 DOM 里实时定位其「编辑」按钮 → CGEvent 真鼠标点击(防检测)。"""
+    safe = title.replace("\\", "\\\\").replace("'", "\\'")
+    rect = _run_js(pid, wid, _JS_EDIT_RECT.replace("__TITLE__", safe))
+    if not (isinstance(rect, dict) and rect.get("ok")):
+        return False
+    _activate_chrome_front()
+    return _cgclick_rect(rect, pid, wid)
+
+
+def _dom_has_edit(pid, wid):
+    r = _run_js(pid, wid, _JS_HAS_EDIT)
+    return bool(r and r.get("ok") and r.get("n", 0) >= 1)
+
+
+def _dom_has_textarea(pid, wid):
+    r = _run_js(pid, wid, _JS_HAS_TEXTAREA)
+    return bool(r and r.get("ok") and r.get("n", 0) >= 1)
+
+
 def find_window():
     apps = cua("list_apps")
     for a in apps.get("apps", []):
@@ -153,11 +307,15 @@ def nav_to(url, pid, wid, check_fn, timeout=25):
 
 def has_edit_links(pid, wid):
     tree = ax_tree(pid, wid)
-    return any((_ax_link_text(ln) or "") in _EDIT_LABELS for ln in tree.split("\n"))
+    if any((_ax_link_text(ln) or "") in _EDIT_LABELS for ln in tree.split("\n")):
+        return True
+    return _dom_has_edit(pid, wid)            # AX 没有 → JS DOM 兜底确认
 
 
 def has_textarea(pid, wid):
-    return 'AXTextArea' in ax_tree(pid, wid)
+    if 'AXTextArea' in ax_tree(pid, wid):
+        return True
+    return _dom_has_textarea(pid, wid)        # AX 没有 → JS DOM 兜底确认
 
 
 def _is_job_title(val):
@@ -215,13 +373,13 @@ def _parse_open_jobs(tree):
 def scan_open_jobs(pid, wid):
     """扫描列表页开放中岗位；抓不到就重试(渲染时序/跨机 AX 不稳的容错)。"""
     jobs = []
-    for attempt in range(3):
+    for attempt in range(2):
         tree = stable_ax_tree(pid, wid, want=lambda t: any(
             (_ax_link_text(ln) or "") in _EDIT_LABELS for ln in t.split("\n")))
         jobs = _parse_open_jobs(tree)
         if jobs:
             return jobs
-        time.sleep(1.0)
+        time.sleep(0.8)
     return jobs  # 仍为空 → 交由上层兜底(取全部编辑按钮)
 
 
@@ -247,6 +405,43 @@ def parse_editable_jobs(tree):
             jobs.append({"title": last_title, "edit_index": idx})
             last_title = None
     return jobs
+
+
+_DOM_MODE = False  # 一旦 AX 失效降级 DOM，后续直接走 DOM（不再每轮重试慢 AX，省时）
+
+
+def scan_jobs(pid, wid):
+    """统一扫描：AX 优先，AX 失败自动降级到 DOM(JS)，且降级后保持 DOM 模式。
+
+    返回 [{title, edit_index?}]：
+      - AX 路径项带 edit_index（用 AX element_index 点击）；
+      - DOM 兜底项不带 edit_index（点击时走 cgclick_edit_by_title 真鼠标兜底）。
+    """
+    global _DOM_MODE
+    if not _DOM_MODE:
+        jobs = scan_open_jobs(pid, wid)                   # ① AX：仅开放中
+        if jobs:
+            return jobs
+        jobs = parse_editable_jobs(stable_ax_tree(pid, wid))  # ② AX：不分状态(状态测失败兜底)
+        if jobs:
+            print("  ⚠ 状态识别失败，AX 回退：按编辑按钮取岗位(不分状态)")
+            return jobs
+    dom = dom_scan_edit_buttons(pid, wid)                 # ③ DOM(JS)：AX 失效兜底
+    if dom and not _DOM_MODE:
+        print(f"  ⚠ AX 树识别失败，降级 DOM+真鼠标点击：取 {len(dom)} 个岗位（后续保持 DOM 模式）")
+        _DOM_MODE = True
+    return dom
+
+
+def click_edit_button(job, pid, wid):
+    """点击某岗位的「编辑」：优先 AX element_index；失败/无 index → DOM+CGEvent 真鼠标兜底。"""
+    idx = job.get("edit_index")
+    if idx is not None:
+        r = cua("click", json.dumps({"pid": pid, "window_id": wid, "element_index": idx}))
+        if not (isinstance(r, dict) and r.get("error")):
+            return True
+        print("    ↩ AX 点击失败，改用真鼠标(CGEvent)兜底...")
+    return cgclick_edit_by_title(job["title"], pid, wid)
 
 
 def extract_edit_page(pid, wid):
@@ -527,30 +722,25 @@ def main():
         print("❌ 未渲染。请刷新 Chrome 中 BOSS 页面后重试。")
         sys.exit(1)
 
-    # ② 扫描开放中岗位
+    # ② 扫描岗位（AX 优先；AX 失败自动降级 DOM+真鼠标点击）
     print("\n② 扫描开放中岗位...")
-    open_jobs = scan_open_jobs(pid, wid)
+    open_jobs = scan_jobs(pid, wid)
 
-    # 也统计关闭的
     tree = stable_ax_tree(pid, wid)
     closed_count = len(re.findall(r'AXStaticText\s*(?:=\s*)?"关闭"', tree))
 
     if not open_jobs:
-        # 容错兜底: 状态检测失败 → 按「编辑」按钮配最近标题，宁多同步不漏
-        open_jobs = parse_editable_jobs(tree)
-        if open_jobs:
-            print(f"  ⚠ 状态检测失败，回退：按编辑按钮取 {len(open_jobs)} 个岗位(不分状态)")
-        else:
-            print("  ❌ 未识别到任何可编辑岗位。请确认 Chrome 已在「职位管理」页并已渲染，"
-                  "刷新后重试。"); sys.exit(1)
-    else:
-        print(f"  开放中: {len(open_jobs)} 个 | 关闭: ~{closed_count} 个")
+        print("  ❌ 未识别到任何可编辑岗位。请确认：Chrome 已在「职位管理」页并渲染完成 / "
+              "已授辅助功能权限 / 窗口在前台可见，然后刷新重试。"); sys.exit(1)
+    print(f"  识别到 {len(open_jobs)} 个岗位 | 关闭: ~{closed_count} 个")
 
     total = len(open_jobs) if not args.limit else min(len(open_jobs), args.limit)
     targets = open_jobs[:total]
 
     for j in targets[:5]:
-        print(f"    [{j['edit_index']:>4}] {j['title']}")
+        tag = j.get('edit_index')
+        tag = str(tag) if tag is not None else 'DOM'
+        print(f"    [{tag:>4}] {j['title']}")
     if len(targets) > 5:
         print(f"    ... 还有 {len(targets)-5} 个")
 
@@ -562,8 +752,8 @@ def main():
     for i in range(total):
         if not remaining: break
 
-        # 重新扫描，按标题匹配下一个待处理岗位
-        fresh_jobs = scan_open_jobs(pid, wid)
+        # 重新扫描（AX→DOM 自动降级），按标题匹配下一个待处理岗位
+        fresh_jobs = scan_jobs(pid, wid)
         # 找第一个在 remaining 中的
         next_job = None
         for fj in fresh_jobs:
@@ -574,16 +764,15 @@ def main():
             print(f"  ⚠ 未找到下一个待处理岗位"); break
 
         title = next_job["title"]
-        edit_idx = next_job["edit_index"]
+        edit_idx = next_job.get("edit_index")
         remaining = [r for r in remaining if r["title"] != title]
 
-        print(f"\n  [{i+1}/{total}] {title} (idx={edit_idx})")
+        idx_tag = edit_idx if edit_idx is not None else "DOM"
+        print(f"\n  [{i+1}/{total}] {title} (idx={idx_tag})")
 
-        # 点击
-        r = cua("click", json.dumps({
-            "pid": pid, "window_id": wid, "element_index": edit_idx
-        }))
-        if r.get("error"): print(f"    ❌ 点击失败"); continue
+        # 点击：AX element_index 优先，失败/无 index → DOM+CGEvent 真鼠标兜底
+        if not click_edit_button(next_job, pid, wid):
+            print(f"    ❌ 点击失败"); continue
 
         # 等编辑页
         for _ in range(12):
