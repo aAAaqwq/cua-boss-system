@@ -41,7 +41,7 @@ cua-boss-system/
 │   ├── server.py             # 纯标准库 HTTP 路由(仅绑 127.0.0.1)，SIGTERM 优雅退出+端口回退
 │   ├── services.py           # 数据/业务层: 读库/跑脚本/登录门禁/评分/配置读写(被 server 调)
 │   ├── ui/                   # 单页控制台: 登录门禁→看板/操作台/问伯乐/设置(可配 DeepSeek key)
-│   ├── 伯乐.app/             # 原生 macOS App 包(双击即用，无终端窗口)
+│   ├── build_app.sh          # 生成原生 macOS「伯乐.app」(osacompile,真 Mach-O,双击无终端窗口)
 │   └── 伯乐.command          # 终端版启动器(可 Ctrl-C 停)
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
@@ -239,10 +239,15 @@ python scripts/query_db.py --rank --job-id "全栈开发"  # 强制指定岗位(
 ```bash
 python desktop/server.py            # 起服务 + 自动开浏览器(默认 127.0.0.1:8765)
 python desktop/server.py --port 8888 --no-open
-# 或双击 desktop/伯乐.app (原生 App 图标) / desktop/伯乐.command (终端版,可 Ctrl-C 停)
+bash desktop/build_app.sh           # 生成原生「伯乐.app」→ 之后双击 App 图标即用
+# 或双击 desktop/伯乐.command (终端版,可 Ctrl-C 停)
 ```
 
-> **打包成桌面程序**: `desktop/伯乐.app` 是手搓的原生 macOS App 包(Info.plist + `Contents/MacOS/bole-launch` 脚本定位仓库根→起服务→开浏览器)，双击即用、无终端窗口。**当前仍需本机装 Python + 有本仓库**;真正的独立分发(内嵌 Python 运行时 + 签名公证 `.dmg`)是 P3(见 docs/产品化规划.md)。
+> **打包成桌面程序**: `desktop/build_app.sh` 用系统自带 `osacompile` 生成真 Mach-O 的
+> `伯乐.app`(把本机仓库路径+python 烧进去,双击起服务开浏览器,无终端窗口,已 gitignore)。
+> **当前仍需本机装 Python + 有本仓库**;真正的独立分发(内嵌 Python 运行时 + 签名公证 `.dmg`)
+> 是 P3(见 docs/产品化规划.md)。手搓 shell-script `.app` 在新版 macOS 会被 LaunchServices
+> 拒绝(-10669),故改用 osacompile 原生包。
 
 **登录门禁**: 启动先查 `/api/auth`(读 `data/.cloud_auth.json`)，未登录铺登录页;`/api/auth/login` 调 `app.cloud_sync.login`(Supabase)。未登录时 `/api/run` 返回 401(许可门禁)。
 

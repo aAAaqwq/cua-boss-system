@@ -21,3 +21,6 @@ data/candidates.db
 data/cloud_queue.jsonl
 web/config.js
 data/.cloud_auth.json
+
+# 桌面端本地构建物(用 desktop/build_app.sh 生成)
+desktop/伯乐.app/
