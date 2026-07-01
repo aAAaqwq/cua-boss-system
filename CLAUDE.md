@@ -37,6 +37,10 @@ cua-boss-system/
 │   ├── parse_resume.py         # PDF简历转文字(主路径解析器)+批量回填DB正文(--backfill)
 │   ├── bole.py                 # 和「伯乐」对话(DeepSeek驱动, app/bole_agent.py)；--ask/--json 供桌面App
 │   └── doctor.py               # 装机自检(前置就绪体检, --json 供App首次引导)
+├── desktop/                  # P2 桌面端(本地 Web App = 将来 Tauri 壳的 WebView 前端)
+│   ├── server.py             # 纯标准库本地服务(仅绑 127.0.0.1)，桥接脚本/DB → /api
+│   ├── ui/                   # 单页控制台: 看板/操作台/问伯乐/设置(可配 DeepSeek key)
+│   └── 伯乐.command          # 双击启动 + 自动开浏览器
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
@@ -225,6 +229,22 @@ python scripts/query_db.py --rank --job-id "全栈开发"  # 强制指定岗位(
 ```
 
 **评分对象**: (未评分 ∪ 数据近 N 天更新过且比上次评分新) **且有简历附件内容**(N=scoring.json input_limits.rescore_window_days,默认2;数据更新由 updated_at 触发器跟踪)。**按候选人沟通的职位 job_position 匹配岗位再评分并缓存**(score/scored_at) → 按总分降序展示「最近 --days 天活跃」未面试前 --top 名。--rescore 强制重算,--no-score 只读缓存,无 uid / 无简历者跳过。见下方评分系统。
+
+## 桌面端 (desktop/ — P2 产品化)
+
+给不懂技术的 HR 的图形界面。**本地 Web App**：一个只绑 `127.0.0.1` 的纯标准库 HTTP 服务，把浏览器 UI 桥接到既有脚本与 `candidates.db`。**就是将来 Tauri 壳的 WebView 前端**(打包时直接复用 `desktop/ui` 与 `/api` 接口，不重写)。
+
+```bash
+python desktop/server.py            # 起服务 + 自动开浏览器(默认 127.0.0.1:8765)
+python desktop/server.py --port 8888 --no-open
+# 或双击 desktop/伯乐.command
+```
+
+四个页面: **看板**(`/api/dashboard` 只读库统计+评分榜) / **操作台**(`/api/run` 白名单任务 greet/collect/chat/pipeline 后台跑 + `/api/job/{id}` 日志轮询,支持 dry-run/最低学历) / **问伯乐**(`/api/bole` 进程内调 `app.bole_agent`) / **设置**(`/api/config` 读写 DeepSeek key/模型/接口/云同步到 `.env`)。
+
+**DeepSeek key 在设置页即可配**: 写 `.env` **并同时** `os.environ` → 无需重启即时生效(`_get_deepseek_config` 每次读 env、env 优先级 > .env);掩码回显、掩码值再存不误覆盖真 key;原子写、保留注释。用户不用碰终端。
+
+**安全**: 服务仅回环地址、静态文件防目录穿越、任务白名单防任意命令执行。简历下载侧 `_js_str()` 统一转义(防 JS 注入)、`_is_safe_pdf_url()` 域名白名单(防 SSRF/`file://`)。
 
 ## 话术模板 (config/reply.json / reply-templates.json)
 

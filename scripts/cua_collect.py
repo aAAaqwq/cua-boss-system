@@ -15,7 +15,7 @@
   python scripts/cua_collect.py --limit 10           # 前10个
   python scripts/cua_collect.py --min-degree 硕士    # 学历筛选
 """
-import base64, json, sqlite3, subprocess, sys, time, re, random, os, urllib.request, shutil
+import base64, json, sqlite3, subprocess, sys, time, re, random, os, urllib.request, urllib.parse, shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -66,6 +66,33 @@ def cua(*args):
         if pat.lower() in text.lower():
             return {"error": text}
     return {"text": text}
+
+
+def _js_str(s) -> str:
+    """把任意字符串安全转义为「可嵌入单引号 JS 字面量」的内容。
+
+    顺序关键：先转义反斜杠，再转义引号，否则形如 \\' 的输入会逃逸出字符串
+    上下文（安全审查 HIGH：候选人姓名等外部可控数据注入 execute_javascript）。
+    另转义反引号/${/换行，堵住模板字面量与折行两条逃逸路径。
+    """
+    return (str(s).replace("\\", "\\\\").replace("'", "\\'")
+            .replace("`", "\\`").replace("${", "\\${")
+            .replace("\r", "\\r").replace("\n", "\\n"))
+
+
+_BOSS_HOSTS = ("zhipin.com", "bosszhipin.com")
+
+
+def _is_safe_pdf_url(url: str) -> bool:
+    """简历下载地址白名单：只放行 https + BOSS 域名，挡掉 file://、站外与 SSRF。"""
+    try:
+        u = urllib.parse.urlparse(str(url))
+    except Exception:  # noqa: BLE001
+        return False
+    if u.scheme != "https":
+        return False
+    host = (u.hostname or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _BOSS_HOSTS)
 
 
 def ax_tree(pid, wid):
@@ -183,7 +210,7 @@ def get_contact_uid(name, pid, wid):
     BOSS 侧边栏每个联系人 li 上有 data-id="<数字>-<索引>",
     数字部分即为用户加密 ID，跨会话唯一。
     """
-    safe = name.replace("'", "\\'")
+    safe = _js_str(name)
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": f"""
@@ -254,7 +281,7 @@ def click_sidebar_ax(idx: int, pid: int, wid: int) -> bool:
 
 def click_sidebar(name, pid, wid):
     """JS点侧边栏联系人，同时提取 data-id 作为 UID（保留作为 fallback）"""
-    safe = name.replace("'", "\\'")
+    safe = _js_str(name)
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": f"""
@@ -295,7 +322,7 @@ def click_sidebar(name, pid, wid):
 
 def js_click(text, pid, wid, last=False):
     """JS点击任意文字元素（找父级可点击）。last=True时取最后一个匹配元素"""
-    safe = text.replace("'", "\\'")
+    safe = _js_str(text)
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid, "action": "execute_javascript",
         "javascript": f"""
@@ -421,7 +448,7 @@ def _fetch_pdf_via_page(pid, wid, pdf_url: str) -> bytes | None:
     目录。用 overrideMimeType('...x-user-defined') 取原始二进制 → btoa 转 base64 回传。
     返回 PDF bytes，失败返回 None（大文件 base64 回传若被截断会校验 %PDF- 失败而降级）。
     """
-    safe = pdf_url.replace("\\", "\\\\").replace("'", "\\'")
+    safe = _js_str(pdf_url)
     js = (
         "JSON.stringify((function(){try{"
         "var x=new XMLHttpRequest();x.open('GET','" + safe + "',false);"
@@ -504,6 +531,13 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     if not pdf_url:
         return None
 
+    # 安全审查 MEDIUM(SSRF)：iframe-direct/embed 分支会原样返回页面上任意元素的 src，
+    # 若指向 file:// 或站外地址，urllib 兜底(默认含 FileHandler)会真的读本地文件/发外连。
+    # 统一白名单：只放行 https + BOSS 域名，其余分支直接放弃下载(不进任何一级链路)。
+    if not _is_safe_pdf_url(pdf_url):
+        print(f"    ⚠ 跳过非法下载地址(非 BOSS/https): {pdf_url[:60]}")
+        return None
+
     # 构造安全文件名。
     # ★ 固定 .pdf：BOSS 预览/下载 URL(preview4boss)给的【始终是 PDF】，三条下载策略也都
     #   按 %PDF- 魔术字节校验。原先用候选人简历原名后缀(可能 .docx/.doc)→ 把 PDF 字节存成
@@ -533,7 +567,7 @@ def _download_attachment(pid, wid, name: str, filename: str = "") -> str | None:
     dl_dir = Path(os.environ.get("BOSS_CHROME_DOWNLOAD_DIR", str(Path.home() / "Downloads")))
     before = set(str(p) for p in dl_dir.iterdir()) if dl_dir.exists() else set()
 
-    safe_pdf_url = pdf_url.replace("'", "\\'")
+    safe_pdf_url = _js_str(pdf_url)
     r = cua("page", json.dumps({
         "pid": pid, "window_id": wid,
         "action": "execute_javascript",

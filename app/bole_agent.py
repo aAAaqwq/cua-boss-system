@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -52,8 +53,12 @@ def load_persona() -> str:
     parts = []
     for rel in _PERSONA_FILES:
         p = ROOT / rel
-        if p.exists():
+        if not p.exists():
+            continue
+        try:
             parts.append(f"# ===== {rel} =====\n{p.read_text(encoding='utf-8')}")
+        except Exception as e:  # noqa: BLE001 单个文件坏了不拖垮整个人设加载
+            print(f"[bole] 跳过人设文件 {rel}: {e}", file=sys.stderr)
     parts.append(_CAPABILITIES)
     _persona_cache = "\n\n".join(parts)
     return _persona_cache

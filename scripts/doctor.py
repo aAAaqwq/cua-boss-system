@@ -11,7 +11,6 @@
 """
 import argparse
 import json
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -33,8 +32,8 @@ def _cmd_ver(cmd, args=("--version",)):
     try:
         r = subprocess.run([exe, *args], capture_output=True, text=True, timeout=8)
         return True, (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr) else ""
-    except Exception:
-        return True, ""
+    except Exception as e:  # 二进制在但跑不起来：仍算装了，但把故障暴露出来
+        return True, f"已安装但无法执行: {type(e).__name__}"
 
 
 def run_checks() -> list[dict]:
@@ -59,8 +58,8 @@ def run_checks() -> list[dict]:
                 env[k.strip()] = v.strip()
     checks.append(_ok("DeepSeek API Key", bool(env.get("DEEPSEEK_API_KEY")),
                       "未配则智能回复/伯乐降级"))
-    checks.append(_ok("Supabase 配置", bool(env.get("SUPABASE_URL") or True),
-                      "URL/anon 已内置默认", critical=False))
+    checks.append(_ok("Supabase 配置", True,
+                      "URL/anon 已内置默认，无需手配", critical=False))
 
     # 业务配置（缺则用 -template 兜底）
     for f in ("config/jobs.json", "config/reply.json", "config/filter.json", "config/scoring.json"):

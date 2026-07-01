@@ -25,7 +25,10 @@ def main() -> None:
     args = p.parse_args()
 
     if args.ask:
-        reply, err = ask(args.ask)
+        try:
+            reply, err = ask(args.ask)
+        except Exception as e:  # noqa: BLE001 保证 --json 契约：任何异常也只输出一段合法 JSON
+            reply, err = None, str(e)
         if args.json:
             print(json.dumps({"ok": bool(reply), "reply": reply or "", "error": err},
                              ensure_ascii=False))
