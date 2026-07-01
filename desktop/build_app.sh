@@ -1,4 +1,5 @@
 #!/bin/bash
+# © 2026 Daniel Li (Open CAIO). 伯乐 AI 招聘助手 · 版权所有 All rights reserved.
 # 生成原生 macOS App「伯乐.app」（用系统自带 osacompile，无需任何第三方依赖）。
 # 产物是真正的 Mach-O 应用（不是脚本包），Finder 双击即用、有独立图标、无终端窗口。
 # 为本机构建：把仓库绝对路径与 python 解释器烧进去。移机请重跑本脚本。

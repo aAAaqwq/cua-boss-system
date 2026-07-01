@@ -1,4 +1,5 @@
 #!/bin/bash
+# © 2026 Daniel Li (Open CAIO). 伯乐 AI 招聘助手 · 版权所有 All rights reserved.
 # 伯乐桌面端 · 双击启动
 # 起本地服务(后台，nohup 完全脱离——关掉本窗口/退出终端都不影响)，
 # 再以「应用窗口」模式打开(独立窗口、无地址栏，像原生 App)。

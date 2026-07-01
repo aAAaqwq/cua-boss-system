@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# © 2026 Daniel Li (Open CAIO). 伯乐 AI 招聘助手 · 版权所有 All rights reserved.
 """desktop/services.py — 桌面端数据/业务层（被 server.py 的 HTTP 路由调用）
 
 把「读库、跑脚本、登录门禁、评分、配置读写」等真实业务从 HTTP 层剥出来，

@@ -1,4 +1,5 @@
 "use strict";
+/* 伯乐 AI 招聘助手 · © 2026 Daniel Li (Open CAIO) · 版权所有 All rights reserved. */
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -18,9 +19,18 @@ function enterApp(email) {
   $("#userEmail").textContent = email || "已登录";
   loadDoctor(); loadBoard();
 }
+// 登录前必须勾选同意隐私条款
+$("#agreeTerms").addEventListener("change", (e) => { $("#loginBtn").disabled = !e.target.checked; });
+$("#showTerms").addEventListener("click", () => { $("#termsOverlay").hidden = false; });
+$("#closeTerms").addEventListener("click", () => {
+  $("#termsOverlay").hidden = true;
+  $("#agreeTerms").checked = true; $("#loginBtn").disabled = false;  // 读完即视为同意
+});
+
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const btn = $("#loginBtn"), err = $("#loginErr");
+  if (!$("#agreeTerms").checked) { err.textContent = "请先阅读并同意隐私与数据安全条款"; return; }
   btn.disabled = true; btn.textContent = "登录中…"; err.textContent = "";
   const res = await api("/api/auth/login", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -289,12 +299,14 @@ async function sendChat(text) {
   $("#chatText").value = "";
   $("#chatChips").innerHTML = "";
   addMsg("user", text);
-  const think = addMsg("bot thinking", "伯乐思考中…");
+  $("#botStatus").textContent = "正在输入…";
+  const think = addMsg("bot", "", { typing: true });
   const res = await api("/api/bole", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: text, history }),
   });
   think.remove();
+  $("#botStatus").textContent = "在线 · AI 招聘助手";
   if (res.ok) {
     addMsg("bot", res.reply);
     history.push({ role: "user", content: text }, { role: "assistant", content: res.reply });
@@ -305,14 +317,36 @@ async function sendChat(text) {
     renderChips(STARTER_CHIPS);
   }
 }
-renderChips(STARTER_CHIPS);
-function addMsg(cls, text) {
+function nowHM() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+// 先 esc 再把 **粗体** 转 <strong>（esc 已中和 HTML，安全）
+function fmt(text) {
+  return esc(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+}
+let lastSender = null;
+function addMsg(cls, text, opts = {}) {
+  const sender = cls.split(" ")[0]; // "bot" | "user"
+  const log = $("#chatLog");
+  const grouped = !opts.typing && sender === lastSender;
+  if (grouped && log.lastElementChild) log.lastElementChild.classList.add("no-tail");
   const el = document.createElement("div");
-  el.className = "msg " + cls;
-  el.innerHTML = `<div class="bubble">${esc(text)}</div>`;
-  const log = $("#chatLog"); log.appendChild(el); log.scrollTop = log.scrollHeight;
+  el.className = "msg " + cls + (grouped ? " grouped" : "");
+  if (opts.typing) {
+    el.innerHTML = '<div class="bubble typing"><span></span><span></span><span></span></div>';
+  } else {
+    const ticks = sender === "user" ? '<span class="ticks">✓✓</span>' : "";
+    el.innerHTML = `<div class="bubble">${fmt(text)}` +
+      `<span class="meta"><span class="time">${nowHM()}</span>${ticks}</span></div>`;
+    lastSender = sender;
+  }
+  log.appendChild(el); log.scrollTop = log.scrollHeight;
   return el;
 }
+// 初始问候 + 起始建议（放在 addMsg / lastSender 定义之后，避免 TDZ）
+addMsg("bot", "你好，我是伯乐。想让我帮你打招呼、收简历，还是看看谁最合适？直接说，或点下面的按钮。");
+renderChips(STARTER_CHIPS);
 
 /* ── 设置 ── */
 async function loadConfig() {

@@ -1,3 +1,4 @@
+/* 伯乐 AI 招聘助手 · © 2026 Daniel Li (Open CAIO) · 版权所有 All rights reserved. */
 :root {
   --ink: oklch(22% 0.02 260);
   --ink-soft: oklch(42% 0.02 260);
@@ -149,6 +150,7 @@ body {
   transition: filter var(--dur), transform var(--dur); }
 .primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
 .primary:active { transform: none; }
+.primary:disabled { opacity: 0.45; cursor: not-allowed; filter: none; transform: none; }
 .ghost { padding: 8px 15px; border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--ink-soft); cursor: pointer; font-size: 13.5px;
   transition: border-color var(--dur), color var(--dur); }
@@ -164,22 +166,74 @@ body {
   padding: 16px; font: 12.5px/1.6 "SF Mono", ui-monospace, Menlo, monospace;
   max-height: 340px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 
-/* 问伯乐 */
-.chat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  box-shadow: var(--shadow); display: flex; flex-direction: column; height: calc(100vh - 190px); }
-.chat-log { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
-.msg { display: flex; }
+/* 问伯乐 · Telegram 风聊天 */
+.chat { display: flex; flex-direction: column; height: calc(100vh - 190px);
+  border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+  background:
+    radial-gradient(oklch(58% 0.11 165 / 0.06) 1.2px, transparent 1.3px) 0 0 / 24px 24px,
+    linear-gradient(170deg, oklch(97.5% 0.016 165), oklch(98.8% 0.006 95)); }
+.chat-topbar { display: flex; align-items: center; gap: 11px; padding: 11px 18px;
+  background: var(--surface); border-bottom: 1px solid var(--line); }
+.avatar.sm { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 16px; font-weight: 700; color: oklch(25% 0.02 260);
+  background: linear-gradient(140deg, var(--gold), oklch(80% 0.11 88)); box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.3); }
+.ct-meta { display: flex; flex-direction: column; line-height: 1.3; }
+.ct-meta strong { font-size: 15px; }
+.ct-meta span { font-size: 12px; color: var(--jade-deep); }
+
+.chat-log { flex: 1; overflow-y: auto; padding: 18px 16px 6px; display: flex; flex-direction: column; gap: 2px; }
+.msg { display: flex; margin-top: 11px; animation: msgIn 0.26s var(--ease); }
+.msg.grouped { margin-top: 3px; }
 .msg.user { justify-content: flex-end; }
-.bubble { max-width: 74%; padding: 12px 15px; border-radius: 14px; font-size: 14.5px; line-height: 1.55; }
-.msg.bot .bubble { background: var(--paper); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
-.msg.user .bubble { background: var(--jade-deep); color: #fff; border-bottom-right-radius: 4px; }
-.msg.bot.thinking .bubble { color: var(--ink-faint); font-style: italic; }
-.chat-input { display: flex; gap: 10px; padding: 14px; border-top: 1px solid var(--line); }
-.chat-input input { flex: 1; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px 0; }
-.chip { padding: 7px 14px; border: 1px solid var(--jade); border-radius: 999px; background: oklch(97% 0.03 165);
+@keyframes msgIn { from { opacity: 0; transform: translateY(9px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+.bubble { position: relative; max-width: 74%; padding: 7px 11px; font-size: 14.5px; line-height: 1.46;
+  border-radius: 16px; box-shadow: 0 1px 1.5px oklch(30% 0.02 260 / 0.1);
+  word-break: break-word; white-space: pre-wrap; }
+.msg.bot .bubble { background: #fff; color: var(--ink); border-bottom-left-radius: 6px; }
+.msg.user .bubble { background: linear-gradient(165deg, var(--jade), var(--jade-deep)); color: #fff; border-bottom-right-radius: 6px; }
+/* 尾巴：仅每组最后一条带（JS 给中间的加 .no-tail） */
+.bubble::after { content: ""; position: absolute; bottom: 0; width: 12px; height: 13px; }
+.msg.bot .bubble::after { left: -6px; background: #fff; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
+.msg.user .bubble::after { right: -6px; background: var(--jade-deep); clip-path: polygon(0 0, 100% 100%, 0 100%); }
+.msg.no-tail .bubble::after, .bubble.typing::after { display: none; }
+.msg.no-tail.bot .bubble { border-bottom-left-radius: 16px; }
+.msg.no-tail.user .bubble { border-bottom-right-radius: 16px; }
+
+/* 时间 + 双勾（Telegram 式浮动在气泡右下，正文绕排） */
+.bubble .meta { float: right; display: inline-flex; align-items: center; gap: 3px;
+  margin: 8px -2px -2px 10px; font-size: 10.5px; user-select: none; }
+.msg.bot .meta { color: var(--ink-faint); }
+.msg.user .meta { color: oklch(100% 0 0 / 0.8); }
+.meta .ticks { font-size: 11px; letter-spacing: -3px; padding-right: 2px; }
+
+/* 输入中的三点动画 */
+.bubble.typing { display: flex; gap: 4px; padding: 12px 14px; }
+.bubble.typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint);
+  animation: typing 1.3s infinite ease-in-out; }
+.bubble.typing span:nth-child(2) { animation-delay: 0.18s; }
+.bubble.typing span:nth-child(3) { animation-delay: 0.36s; }
+@keyframes typing { 0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-5px); opacity: 1; } }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 2px; background: transparent; }
+.chip { padding: 7px 14px; border: 1px solid var(--jade); border-radius: 999px;
+  background: oklch(100% 0 0 / 0.7); backdrop-filter: blur(4px);
   color: var(--jade-deep); font-size: 13px; cursor: pointer; transition: all var(--dur) var(--ease); }
 .chip:hover { background: var(--jade-deep); color: #fff; transform: translateY(-1px); }
+
+.chat-input { display: flex; gap: 10px; align-items: center; padding: 12px 14px;
+  background: var(--surface); border-top: 1px solid var(--line); }
+.chat-input input { flex: 1; padding: 11px 17px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 14.5px; background: var(--paper); }
+.chat-input input:focus { outline: none; border-color: var(--jade); background: var(--surface);
+  box-shadow: 0 0 0 3px oklch(58% 0.11 165 / 0.12); }
+.send-btn { width: 42px; height: 42px; flex: 0 0 42px; border: 0; border-radius: 50%; cursor: pointer;
+  background: linear-gradient(160deg, var(--jade), var(--jade-deep)); color: #fff; display: grid; place-items: center;
+  transition: transform var(--dur) var(--ease), filter var(--dur); }
+.send-btn:hover { filter: brightness(1.08); transform: scale(1.06); }
+.send-btn:active { transform: scale(0.95); }
+.send-btn svg { transform: translateX(1px); }
 
 .save-msg { font-size: 13px; color: var(--jade-deep); }
 .save-msg.err { color: var(--rose); }
@@ -209,11 +263,31 @@ body {
 .login-err { color: var(--rose); font-size: 13px; min-height: 18px; }
 .login-foot { color: var(--ink-faint); font-size: 11.5px; margin-top: 20px; line-height: 1.5; }
 .login-foot code { background: var(--paper); padding: 1px 5px; border-radius: 4px; }
+.consent { display: flex; align-items: flex-start; gap: 8px; text-align: left; font-size: 12.5px;
+  color: var(--ink-soft); line-height: 1.5; margin-top: 2px; }
+.consent input { margin-top: 2px; flex: 0 0 auto; }
+.link-inline { border: 0; background: none; padding: 0; color: var(--jade-deep); cursor: pointer;
+  font-size: 12.5px; text-decoration: underline; }
+.powered { font-size: 11px; color: var(--ink-faint); margin-top: 14px; letter-spacing: 0.3px; }
+.powered strong { color: var(--ink-soft); font-weight: 600; }
+
+/* 条款弹层 */
+.terms-overlay { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center;
+  background: oklch(20% 0.02 264 / 0.5); backdrop-filter: blur(2px); }
+.terms-card { width: min(460px, 90vw); background: var(--surface); border-radius: 16px; padding: 28px 30px;
+  box-shadow: 0 30px 80px oklch(15% 0.03 262 / 0.5); text-align: left; }
+.terms-card h3 { font-size: 19px; margin-bottom: 14px; }
+.terms-card ul { margin: 0 0 20px; padding-left: 18px; display: flex; flex-direction: column; gap: 10px;
+  font-size: 13px; line-height: 1.6; color: var(--ink-soft); }
+.terms-card ul b { color: var(--jade-deep); }
+.terms-card .powered { text-align: center; margin-top: 14px; }
 
 .user-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 4px; }
 .user-email { flex: 1; font-size: 12px; color: oklch(70% 0.02 260); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-btn { background: none; border: 0; color: oklch(75% 0.02 260); font-size: 12px; cursor: pointer; text-decoration: underline; }
 .link-btn:hover { color: #fff; }
+.rail-powered { margin-top: 10px; padding: 0 4px; font-size: 10px; color: oklch(58% 0.02 260); letter-spacing: 0.3px; }
+.rail-powered strong { color: oklch(74% 0.02 260); font-weight: 600; }
 
 /* ── 候选人卡片(按钮化) ── */
 .top-row { width: 100%; border: 0; background: none; cursor: pointer; text-align: left; font: inherit; color: inherit;

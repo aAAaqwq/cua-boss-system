@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# © 2026 Daniel Li (Open CAIO). 伯乐 AI 招聘助手 · 版权所有 All rights reserved.
 """desktop/server.py — 伯乐桌面端本地服务（纯标准库，只做 HTTP 路由）
 
 只监听 127.0.0.1，把浏览器 UI（desktop/ui）桥接到 desktop/services.py 的真实业务。
