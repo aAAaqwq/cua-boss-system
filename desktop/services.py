@@ -306,15 +306,30 @@ def rescore(uid: str) -> dict:
 
 
 # ────────────────────── 伯乐对话 ──────────────────────
+_TOOL_LABELS = {
+    "get_dashboard": "查看板数据", "top_candidates": "查评分榜",
+    "find_candidate": "搜候选人", "run_task": "启动任务",
+    "job_status": "查任务进度", "schedule_interview": "约面试",
+}
+
+
 def bole_reply(message: str, history: list[dict]) -> dict:
+    """伯乐 agent：可调用真实工具（读库/跑脚本/约面试）后再作答。"""
     try:
-        from app.bole_agent import chat
+        from app.bole_agent import run_agent
+        from desktop.bole_tools import TOOLS, execute
         msgs = [m for m in history if m.get("role") in ("user", "assistant")][-20:]
         msgs.append({"role": "user", "content": message})
-        reply, err = chat(msgs)
-        return {"ok": bool(reply), "reply": reply or "", "error": err}
+        reply, actions, err = run_agent(msgs, TOOLS, execute)
+        # 动作摘要（去重，给前端做透明化展示：伯乐真的做了什么）
+        acted = []
+        for a in actions:
+            label = _TOOL_LABELS.get(a["name"], a["name"])
+            if label not in acted:
+                acted.append(label)
+        return {"ok": bool(reply), "reply": reply or "", "error": err, "actions": acted}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "reply": "", "error": str(e)}
+        return {"ok": False, "reply": "", "error": str(e), "actions": []}
 
 
 def bole_suggest(history: list[dict], reply: str) -> dict:

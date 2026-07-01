@@ -221,6 +221,8 @@ body {
   background: oklch(100% 0 0 / 0.7); backdrop-filter: blur(4px);
   color: var(--jade-deep); font-size: 13px; cursor: pointer; transition: all var(--dur) var(--ease); }
 .chip:hover { background: var(--jade-deep); color: #fff; transform: translateY(-1px); }
+.action-line { align-self: center; margin: 8px 0 2px; padding: 3px 12px; border-radius: 999px;
+  background: oklch(58% 0.11 165 / 0.1); color: var(--jade-deep); font-size: 11.5px; font-weight: 500; }
 .chips-loading { font-size: 12px; color: var(--ink-faint); padding: 7px 2px; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 

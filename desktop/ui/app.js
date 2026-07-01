@@ -308,6 +308,7 @@ async function sendChat(text) {
   think.remove();
   $("#botStatus").textContent = "在线 · AI 招聘助手";
   if (res.ok) {
+    if (res.actions && res.actions.length) addActionLine(res.actions);
     addMsg("bot", res.reply);
     history.push({ role: "user", content: text }, { role: "assistant", content: res.reply });
     if (history.length > 40) history.splice(0, history.length - 40);
@@ -338,6 +339,15 @@ function nowHM() {
 // 先 esc 再把 **粗体** 转 <strong>（esc 已中和 HTML，安全）
 function fmt(text) {
   return esc(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+}
+// 透明化：伯乐真的调了哪些工具（读了真实数据/跑了真实脚本）
+function addActionLine(actions) {
+  const el = document.createElement("div");
+  el.className = "action-line";
+  el.innerHTML = "🔧 " + actions.map((a) => esc(a)).join(" · ");
+  const log = $("#chatLog");
+  log.appendChild(el); log.scrollTop = log.scrollHeight;
+  lastSender = null; // 打断分组，下一条气泡带尾巴
 }
 let lastSender = null;
 function addMsg(cls, text, opts = {}) {
