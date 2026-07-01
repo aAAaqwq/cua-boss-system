@@ -1,0 +1,20 @@
+#!/bin/bash
+# 伯乐.app 启动器：定位仓库根 → 起本地服务 → 自动开浏览器。
+# 双击 .app 即用；退出：在浏览器点「退出」或到活动监视器结束 python 进程。
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# MacOS → Contents → 伯乐.app → desktop → 仓库根
+ROOT="$(cd "$HERE/../../../.." && pwd)"
+cd "$ROOT" || exit 1
+
+PY="$(command -v python3 || command -v python)"
+if [ -z "$PY" ]; then
+  osascript -e 'display alert "缺少 Python" message "请先安装 Python 3.10+ 再打开伯乐。"'
+  exit 1
+fi
+
+# 已在运行则直接开浏览器，不重复起
+if curl -s -o /dev/null "http://127.0.0.1:8765/"; then
+  open "http://127.0.0.1:8765/"
+  exit 0
+fi
+exec "$PY" desktop/server.py

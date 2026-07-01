@@ -38,9 +38,11 @@ cua-boss-system/
 │   ├── bole.py                 # 和「伯乐」对话(DeepSeek驱动, app/bole_agent.py)；--ask/--json 供桌面App
 │   └── doctor.py               # 装机自检(前置就绪体检, --json 供App首次引导)
 ├── desktop/                  # P2 桌面端(本地 Web App = 将来 Tauri 壳的 WebView 前端)
-│   ├── server.py             # 纯标准库本地服务(仅绑 127.0.0.1)，桥接脚本/DB → /api
-│   ├── ui/                   # 单页控制台: 看板/操作台/问伯乐/设置(可配 DeepSeek key)
-│   └── 伯乐.command          # 双击启动 + 自动开浏览器
+│   ├── server.py             # 纯标准库 HTTP 路由(仅绑 127.0.0.1)，SIGTERM 优雅退出+端口回退
+│   ├── services.py           # 数据/业务层: 读库/跑脚本/登录门禁/评分/配置读写(被 server 调)
+│   ├── ui/                   # 单页控制台: 登录门禁→看板/操作台/问伯乐/设置(可配 DeepSeek key)
+│   ├── 伯乐.app/             # 原生 macOS App 包(双击即用，无终端窗口)
+│   └── 伯乐.command          # 终端版启动器(可 Ctrl-C 停)
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
@@ -237,14 +239,22 @@ python scripts/query_db.py --rank --job-id "全栈开发"  # 强制指定岗位(
 ```bash
 python desktop/server.py            # 起服务 + 自动开浏览器(默认 127.0.0.1:8765)
 python desktop/server.py --port 8888 --no-open
-# 或双击 desktop/伯乐.command
+# 或双击 desktop/伯乐.app (原生 App 图标) / desktop/伯乐.command (终端版,可 Ctrl-C 停)
 ```
 
-四个页面: **看板**(`/api/dashboard` 只读库统计+评分榜) / **操作台**(`/api/run` 白名单任务 greet/collect/chat/pipeline 后台跑 + `/api/job/{id}` 日志轮询,支持 dry-run/最低学历) / **问伯乐**(`/api/bole` 进程内调 `app.bole_agent`) / **设置**(`/api/config` 读写 DeepSeek key/模型/接口/云同步到 `.env`)。
+> **打包成桌面程序**: `desktop/伯乐.app` 是手搓的原生 macOS App 包(Info.plist + `Contents/MacOS/bole-launch` 脚本定位仓库根→起服务→开浏览器)，双击即用、无终端窗口。**当前仍需本机装 Python + 有本仓库**;真正的独立分发(内嵌 Python 运行时 + 签名公证 `.dmg`)是 P3(见 docs/产品化规划.md)。
+
+**登录门禁**: 启动先查 `/api/auth`(读 `data/.cloud_auth.json`)，未登录铺登录页;`/api/auth/login` 调 `app.cloud_sync.login`(Supabase)。未登录时 `/api/run` 返回 401(许可门禁)。
+
+四个页面(登录后):
+- **看板** `/api/dashboard`(只读库统计+评分榜) — **候选人卡片可点** → `/api/candidate?uid=` 详情弹层(个人信息 / 简历PDF预览 `/api/resume?uid=` inline / AI评分维度权重 + `/api/candidate/rescore` 现算每维度得分+依据 / 聊天记录)。
+- **操作台** `/api/run` 白名单任务 greet/collect/chat/pipeline 后台跑 + `/api/job/{id}?since=` 轮询。**日志实时**: 子进程 `python -u` 无缓冲逐行刷出(否则块缓冲攒到最后),前端每 1.2s 追加到控制台。
+- **问伯乐** `/api/bole` 进程内调 `app.bole_agent`,带**指引性点击 chips**(启动/追问建议,点即发)。
+- **设置** `/api/config` 读写 DeepSeek key/模型/接口/云同步到 `.env` + `/api/config/test` **真实打一次 DeepSeek**验证可用(非查存在)。
 
 **DeepSeek key 在设置页即可配**: 写 `.env` **并同时** `os.environ` → 无需重启即时生效(`_get_deepseek_config` 每次读 env、env 优先级 > .env);掩码回显、掩码值再存不误覆盖真 key;原子写、保留注释。用户不用碰终端。
 
-**安全**: 服务仅回环地址、静态文件防目录穿越、任务白名单防任意命令执行。简历下载侧 `_js_str()` 统一转义(防 JS 注入)、`_is_safe_pdf_url()` 域名白名单(防 SSRF/`file://`)。
+**安全**: 服务仅回环地址、静态文件防目录穿越、`/api/resume` 路径限定 `data/resumes/` 内防穿越、任务白名单防任意命令执行、DB 全参数化查询、key 掩码返回。简历下载侧 `_js_str()` 统一转义(防 JS 注入)、`_is_safe_pdf_url()` 域名白名单(防 SSRF/`file://`)。
 
 ## 话术模板 (config/reply.json / reply-templates.json)
 

@@ -8,4 +8,4 @@ if [ -z "$PY" ]; then
   read -r -p "按回车关闭…" _
   exit 1
 fi
-exec "$PY" desktop/server.py
+exec "$PY" desktop/server.py "$@"

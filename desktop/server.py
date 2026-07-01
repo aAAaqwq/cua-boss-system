@@ -1,246 +1,45 @@
 #!/usr/bin/env python3
-"""desktop/server.py — 伯乐桌面端本地服务（纯标准库）
+"""desktop/server.py — 伯乐桌面端本地服务（纯标准库，只做 HTTP 路由）
 
-P2 桌面化的引擎层：一个只监听 127.0.0.1 的本地 HTTP 服务，把浏览器 UI
-（desktop/ui）桥接到项目脚本（doctor / bole / pipeline …）与 candidates.db。
-零第三方依赖，双击 desktop/伯乐.command 即启动并自动开浏览器。
-
-这一层就是将来 Tauri 壳的 WebView 前端 + 本地后端：Tauri 打包时直接复用
-desktop/ui 与这些 /api 接口，无需重写。
+只监听 127.0.0.1，把浏览器 UI（desktop/ui）桥接到 desktop/services.py 的真实业务。
+业务逻辑全在 services.py；这里只负责解析请求、分发、序列化响应。零第三方依赖。
+即将来 Tauri 壳的 WebView 前端 + 本地后端（打包直接复用，不重写）。
 
 用法:
   python desktop/server.py                 # 起服务 + 开浏览器（默认 127.0.0.1:8765）
   python desktop/server.py --port 8888 --no-open
-安全:
-  仅绑定回环地址；不接受外部连接。所有子进程在项目根下执行。
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import queue
-import sqlite3
-import subprocess
+import signal
 import sys
 import threading
-import time
-import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from desktop import services as S  # noqa: E402
+
 UI_DIR = Path(__file__).parent / "ui"
-DB_PATH = ROOT / "data" / "candidates.db"
-ENV_PATH = ROOT / ".env"
-PY = sys.executable or "python3"
-
-sys.path.insert(0, str(ROOT))
-
-# ── 可发起的后台任务白名单（防止任意命令执行）──────────────────
-# key -> (脚本相对路径, 数量参数名)。数量与 min-degree/schools/dry-run 受控透传。
-_TASKS = {
-    "greet": ("scripts/cua_greeting_loop.py", "--limit"),
-    "collect": ("scripts/cua_collect.py", "--limit"),
-    "chat": ("scripts/cua_chat_loop.py", "--limit"),
-    "pipeline": ("scripts/boss_pipeline.py", None),  # 用 --greet/--collect/--chat
-}
-
-# 运行中任务表：job_id -> {task, status, log[], proc, started}
-_JOBS: dict[str, dict] = {}
-_JOBS_LOCK = threading.Lock()
-
-_CONTENT_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".svg": "image/svg+xml",
-}
+_CTYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+           ".js": "application/javascript; charset=utf-8", ".svg": "image/svg+xml"}
 
 
-# ────────────────────────── .env 读写 ──────────────────────────
-def _read_env() -> dict[str, str]:
-    env: dict[str, str] = {}
-    if ENV_PATH.exists():
-        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if s and not s.startswith("#") and "=" in s:
-                k, v = s.split("=", 1)
-                env[k.strip()] = v.strip()
-    return env
-
-
-def _write_env_keys(updates: dict[str, str]) -> None:
-    """更新/追加 .env 中的若干键，保留其余行与注释。原子写。"""
-    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
-    remaining = dict(updates)
-    out: list[str] = []
-    for line in lines:
-        s = line.strip()
-        if s and not s.startswith("#") and "=" in s:
-            k = s.split("=", 1)[0].strip()
-            if k in remaining:
-                out.append(f"{k}={remaining.pop(k)}")
-                continue
-        out.append(line)
-    for k, v in remaining.items():
-        out.append(f"{k}={v}")
-    tmp = ENV_PATH.with_suffix(".env.tmp")
-    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
-    os.replace(tmp, ENV_PATH)
-
-
-def _mask(secret: str) -> str:
-    if not secret:
-        return ""
-    if len(secret) <= 8:
-        return "•" * len(secret)
-    return f"{secret[:4]}{'•' * 6}{secret[-4:]}"
-
-
-# ────────────────────────── 数据看板 ──────────────────────────
-def _dashboard() -> dict:
-    if not DB_PATH.exists():
-        return {"ok": False, "reason": "尚无数据库，先跑一次采集", "stats": {}, "top": []}
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    try:
-        def scalar(sql: str) -> int:
-            return int(conn.execute(sql).fetchone()[0])
-
-        stats = {
-            "total": scalar("SELECT COUNT(*) FROM candidates"),
-            "has_resume": scalar("SELECT COUNT(*) FROM candidates WHERE has_resume=1"),
-            "has_wechat": scalar("SELECT COUNT(*) FROM candidates WHERE has_wechat=1"),
-            "interviewed": scalar(
-                "SELECT COUNT(*) FROM candidates WHERE interview_date IS NOT NULL AND interview_date!=''"),
-            "scored": scalar("SELECT COUNT(*) FROM candidates WHERE score IS NOT NULL AND score>0"),
-            "today": scalar(
-                "SELECT COUNT(*) FROM candidates WHERE date(updated_at)=date('now','localtime')"),
-        }
-        rows = conn.execute(
-            "SELECT name, school, degree, job_position, score, score_summary, status "
-            "FROM candidates WHERE score IS NOT NULL AND score>0 "
-            "ORDER BY score DESC LIMIT 8").fetchall()
-        top = [dict(r) for r in rows]
-        return {"ok": True, "stats": stats, "top": top}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "reason": f"读库失败: {e}", "stats": {}, "top": []}
-    finally:
-        conn.close()
-
-
-# ────────────────────────── 伯乐对话（进程内）──────────────────
-def _bole_reply(message: str, history: list[dict]) -> dict:
-    try:
-        from app.bole_agent import chat
-        msgs = [m for m in history if m.get("role") in ("user", "assistant")][-20:]
-        msgs.append({"role": "user", "content": message})
-        reply, err = chat(msgs)
-        return {"ok": bool(reply), "reply": reply or "", "error": err}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "reply": "", "error": str(e)}
-
-
-# ────────────────────────── 子进程任务 ─────────────────────────
-def _run_subcmd_json(rel: str, args: list[str], timeout: int = 30) -> dict:
-    """跑一个输出 JSON 的脚本（doctor 等），解析 stdout 最后一行 JSON。"""
-    try:
-        r = subprocess.run(
-            [PY, str(ROOT / rel), *args],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=timeout)
-        out = (r.stdout or "").strip().splitlines()
-        for line in reversed(out):
-            line = line.strip()
-            if line.startswith("{"):
-                return json.loads(line)
-        return {"ok": False, "error": (r.stderr or "无 JSON 输出")[:500]}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e)}
-
-
-def _launch_job(task: str, params: dict) -> dict:
-    if task not in _TASKS:
-        return {"ok": False, "error": f"未知任务: {task}"}
-    rel, limit_flag = _TASKS[task]
-    cmd = [PY, str(ROOT / rel)]
-
-    if task == "pipeline":
-        for k in ("greet", "collect", "chat"):
-            if params.get(k) is not None:
-                cmd += [f"--{k}", str(int(params[k]))]
-    elif limit_flag is not None and params.get("limit") is not None:
-        cmd += [limit_flag, str(params["limit"])]
-
-    md = params.get("min_degree")
-    if md in ("大专", "本科", "硕士", "博士"):
-        cmd += ["--min-degree", md]
-    if params.get("dry_run"):
-        cmd += ["--dry-run"]
-
-    job_id = uuid.uuid4().hex[:12]
-    job = {"id": job_id, "task": task, "status": "running",
-           "log": [], "started": time.time(), "proc": None}
-    with _JOBS_LOCK:
-        _JOBS[job_id] = job
-
-    def worker() -> None:
-        try:
-            proc = subprocess.Popen(
-                cmd, cwd=str(ROOT), stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, text=True, bufsize=1)
-            job["proc"] = proc
-            for line in iter(proc.stdout.readline, ""):
-                with _JOBS_LOCK:
-                    job["log"].append(line.rstrip("\n"))
-                    if len(job["log"]) > 500:
-                        job["log"] = job["log"][-500:]
-            proc.wait()
-            job["status"] = "done" if proc.returncode == 0 else "failed"
-            job["returncode"] = proc.returncode
-        except Exception as e:  # noqa: BLE001
-            job["status"] = "failed"
-            with _JOBS_LOCK:
-                job["log"].append(f"[server] 启动失败: {e}")
-
-    threading.Thread(target=worker, daemon=True).start()
-    return {"ok": True, "job_id": job_id, "cmd": " ".join(cmd[1:])}
-
-
-def _job_state(job_id: str, since: int = 0) -> dict:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if not job:
-            return {"ok": False, "error": "任务不存在"}
-        log = job["log"][since:]
-        return {"ok": True, "status": job["status"], "next": len(job["log"]),
-                "log": log, "returncode": job.get("returncode")}
-
-
-def _stop_job(job_id: str) -> dict:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-    if not job:
-        return {"ok": False, "error": "任务不存在"}
-    proc = job.get("proc")
-    if proc and proc.poll() is None:
-        proc.terminate()
-        job["status"] = "stopped"
-    return {"ok": True, "status": job["status"]}
-
-
-# ────────────────────────── HTTP 处理 ─────────────────────────
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *args):  # 静默默认访问日志
+    def log_message(self, *args):
         pass
 
+    # ── 响应助手 ──
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
@@ -249,108 +48,156 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8")
 
     def _body(self) -> dict:
+        # 只解析 application/json：挡掉 text/plain「简单请求」绕过 CORS 预检的 CSRF 手法
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        if ctype != "application/json":
+            return {}
         n = int(self.headers.get("Content-Length", 0) or 0)
-        if n <= 0:
+        if n <= 0 or n > 2_000_000:  # 上限 2MB，防超大 body 占内存
             return {}
         try:
             return json.loads(self.rfile.read(n).decode("utf-8"))
         except Exception:  # noqa: BLE001
             return {}
 
-    # 静态文件（仅 UI 目录，防目录穿越）
+    def _origin_ok(self) -> bool:
+        """CSRF 防护：若带 Origin(浏览器跨站请求必带)，必须与本机 Host 同源。
+        无 Origin(同源导航/curl 等非浏览器)放行。"""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        return origin == f"http://{self.headers.get('Host', '')}"
+
+    def _guard(self, require_auth: bool) -> bool:
+        """统一 /api 门禁：先查同源(CSRF)，再按需查登录(许可门禁)。挡下则已回响应。"""
+        if not self._origin_ok():
+            self._json({"ok": False, "error": "跨站请求被拒绝"}, 403)
+            return False
+        if require_auth and not S.auth_status().get("logged_in"):
+            self._json({"ok": False, "error": "未登录，请先登录"}, 401)
+            return False
+        return True
+
+    def _qs(self, key: str, default: str = "") -> str:
+        return parse_qs(urlparse(self.path).query).get(key, [default])[0]
+
     def _serve_static(self, path: str) -> None:
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
         target = (UI_DIR / rel).resolve()
-        if not str(target).startswith(str(UI_DIR.resolve())) or not target.is_file():
+        if not target.is_relative_to(UI_DIR.resolve()) or not target.is_file():
             self._send(404, b"not found", "text/plain; charset=utf-8")
             return
-        ctype = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
-        self._send(200, target.read_bytes(), ctype)
+        self._send(200, target.read_bytes(),
+                   _CTYPES.get(target.suffix, "application/octet-stream"))
 
+    # ── GET ──
     def do_GET(self) -> None:
         path = urlparse(self.path).path
-        if path == "/api/doctor":
-            self._json(_run_subcmd_json("scripts/doctor.py", ["--json"]))
-        elif path == "/api/dashboard":
-            self._json(_dashboard())
-        elif path == "/api/config":
-            env = _read_env()
-            self._json({
-                "ok": True,
-                "deepseek_key_masked": _mask(env.get("DEEPSEEK_API_KEY", "")),
-                "deepseek_key_set": bool(env.get("DEEPSEEK_API_KEY")),
-                "deepseek_model": env.get("DEEPSEEK_MODEL", "deepseek-chat"),
-                "deepseek_base_url": env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-                "cloud_sync": env.get("CLOUD_SYNC", "on"),
-            })
-        elif path.startswith("/api/job/"):
-            job_id = path.rsplit("/", 1)[-1]
-            since = int(urlparse(self.path).query.split("since=")[-1] or 0) \
-                if "since=" in self.path else 0
-            self._json(_job_state(job_id, since))
-        else:
-            self._serve_static(path)
+        if path == "/api/auth":                       # 判断是否登录，开放（仅同源）
+            if self._guard(require_auth=False):
+                self._json(S.auth_status())
+            return
+        if path.startswith("/api/"):                  # 其余 API 一律需登录 + 同源
+            if not self._guard(require_auth=True):
+                return
+            if path == "/api/doctor":
+                self._json(S.run_subcmd_json("scripts/doctor.py", ["--json"]))
+            elif path == "/api/dashboard":
+                self._json(S.dashboard())
+            elif path == "/api/config":
+                self._json(S.config_status())
+            elif path == "/api/candidate":
+                self._json(S.candidate_detail(self._qs("uid")))
+            elif path == "/api/resume":
+                self._serve_resume(self._qs("uid"))
+            elif path.startswith("/api/job/"):
+                self._json(S.job_state(path.rsplit("/", 1)[-1], int(self._qs("since", "0") or 0)))
+            else:
+                self._json({"ok": False, "error": "未知接口"}, 404)
+            return
+        self._serve_static(path)
 
+    def _serve_resume(self, uid: str) -> None:
+        p = S.resume_pdf_path(uid)
+        if not p:
+            self._send(404, b"resume not found", "text/plain; charset=utf-8")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", "inline")
+        data = p.read_bytes()
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    # ── POST ──
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        # 登录/登出：仅同源(防登录 CSRF)，无需已登录
+        if path in ("/api/auth/login", "/api/auth/logout"):
+            if not self._guard(require_auth=False):
+                return
+            body = self._body()
+            self._json(S.do_login(body.get("email", ""), body.get("password", ""))
+                       if path.endswith("login") else S.do_logout())
+            return
+        # 其余 POST：同源 + 已登录
+        if not self._guard(require_auth=True):
+            return
         body = self._body()
         if path == "/api/bole":
-            self._json(_bole_reply(body.get("message", ""), body.get("history", [])))
+            self._json(S.bole_reply(body.get("message", ""), body.get("history", [])))
         elif path == "/api/config":
-            self._json(self._save_config(body))
+            self._json(S.save_config(body))
+        elif path == "/api/config/test":
+            self._json(S.test_deepseek())
+        elif path == "/api/candidate/rescore":
+            self._json(S.rescore(body.get("uid", "")))
         elif path == "/api/run":
-            self._json(_launch_job(body.get("task", ""), body.get("params", {})))
+            self._json(S.launch_job(body.get("task", ""), body.get("params", {})))
         elif path.startswith("/api/job/") and path.endswith("/stop"):
-            self._json(_stop_job(path.split("/")[3]))
+            self._json(S.stop_job(path.split("/")[3]))
         else:
             self._json({"ok": False, "error": "未知接口"}, 404)
-
-    def _save_config(self, body: dict) -> dict:
-        updates: dict[str, str] = {}
-        key = (body.get("deepseek_api_key") or "").strip()
-        # 前端只在用户真正改 key 时才传；掩码原样回传时忽略
-        if key and "•" not in key:
-            updates["DEEPSEEK_API_KEY"] = key
-            os.environ["DEEPSEEK_API_KEY"] = key  # 让进程内伯乐即时生效
-        model = (body.get("deepseek_model") or "").strip()
-        if model:
-            updates["DEEPSEEK_MODEL"] = model
-            os.environ["DEEPSEEK_MODEL"] = model
-        base = (body.get("deepseek_base_url") or "").strip()
-        if base:
-            updates["DEEPSEEK_BASE_URL"] = base
-            os.environ["DEEPSEEK_BASE_URL"] = base
-        cloud = body.get("cloud_sync")
-        if cloud in ("on", "off"):
-            updates["CLOUD_SYNC"] = cloud
-            os.environ["CLOUD_SYNC"] = cloud
-        if not updates:
-            return {"ok": False, "error": "没有要保存的改动"}
-        try:
-            _write_env_keys(updates)
-            return {"ok": True, "saved": list(updates.keys())}
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": f"写 .env 失败: {e}"}
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description="伯乐桌面端本地服务")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    p.add_argument("--no-open", action="store_true")
     args = p.parse_args()
 
-    srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    url = f"http://{args.host}:{args.port}/"
+    # 端口被占用（多为已双击过一次）→ 自动往后找空闲端口，不抛栈
+    srv = None
+    for port in range(args.port, args.port + 12):
+        try:
+            srv = ThreadingHTTPServer((args.host, port), Handler)
+            break
+        except OSError:
+            continue
+    if srv is None:
+        print(f"❌ {args.host}:{args.port}~{args.port + 11} 都被占用了。"
+              f"伯乐可能已在运行——去浏览器看看，或换 --port。")
+        sys.exit(1)
+
+    url = f"http://{args.host}:{srv.server_address[1]}/"
     print(f"🎯 伯乐桌面端已启动 → {url}")
     print("   关闭：Ctrl-C（或直接关这个窗口）")
     if not args.no_open:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+
+    # 退出 App / kill 时（SIGTERM）也干净关闭，不留僵尸端口
+    def _on_term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _on_term)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\n已退出。")
+        print("\n正在停止…")
+        S.terminate_all_jobs()   # 关 App 前先杀掉在跑的 Chrome 自动化子进程，绝不留孤儿
         srv.shutdown()
+        print("已退出。")
 
 
 if __name__ == "__main__":

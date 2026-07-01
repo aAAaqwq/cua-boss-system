@@ -2,11 +2,38 @@
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const api = async (path, opts) => {
-  const r = await fetch(path, opts);
-  return r.json();
-};
+const api = async (path, opts) => (await fetch(path, opts)).json();
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/* ── 登录门禁 ── */
+async function boot() {
+  const a = await api("/api/auth");
+  if (a.logged_in) enterApp(a.email);
+  else showLogin();
+}
+function showLogin() { $("#loginScreen").hidden = false; $("#app").hidden = true; }
+function enterApp(email) {
+  $("#loginScreen").hidden = true;
+  $("#app").hidden = false;
+  $("#userEmail").textContent = email || "已登录";
+  loadDoctor(); loadBoard();
+}
+$("#loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#loginBtn"), err = $("#loginErr");
+  btn.disabled = true; btn.textContent = "登录中…"; err.textContent = "";
+  const res = await api("/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("#loginEmail").value, password: $("#loginPassword").value }),
+  });
+  btn.disabled = false; btn.textContent = "登录";
+  if (res.ok) enterApp(res.email);
+  else err.textContent = res.error || "登录失败";
+});
+$("#logoutBtn").addEventListener("click", async () => {
+  await api("/api/auth/logout", { method: "POST" });
+  showLogin();
+});
 
 /* ── 视图切换 ── */
 $("#nav").addEventListener("click", (e) => {
@@ -19,7 +46,7 @@ $("#nav").addEventListener("click", (e) => {
   if (view === "settings") { loadConfig(); loadDoctor(); }
 });
 
-/* ── 装机自检（侧栏健康灯 + 设置页列表）── */
+/* ── 装机自检 ── */
 async function loadDoctor() {
   const list = $("#doctorList");
   if (list) list.innerHTML = '<div class="empty">自检中…</div>';
@@ -37,8 +64,7 @@ async function loadDoctor() {
   const mark = (c) => (c.ok ? "✅" : c.critical ? "❌" : "⚠️");
   let html = d.checks.map((c) =>
     `<div class="dr-row"><span class="mk">${mark(c)}</span>
-      <span class="nm">${esc(c.name)}</span>
-      <span class="dt">${esc(c.detail)}</span></div>`).join("");
+      <span class="nm">${esc(c.name)}</span><span class="dt">${esc(c.detail)}</span></div>`).join("");
   html += '<div class="dr-sep">以下需人工确认</div>';
   html += (d.manual || []).map((m) =>
     `<div class="dr-row manual"><span class="mk">◻︎</span><span class="nm">${esc(m)}</span></div>`).join("");
@@ -51,9 +77,8 @@ async function loadBoard() {
   const d = await api("/api/dashboard");
   const s = d.stats || {};
   const cards = [
-    ["a", s.total, "候选人总数"], ["b", s.has_resume, "已收简历"],
-    ["c", s.scored, "已评分"], ["a", s.has_wechat, "已加微信"],
-    ["d", s.interviewed, "已约面试"], ["c", s.today, "今日更新"],
+    ["a", s.total, "候选人总数"], ["b", s.has_resume, "已收简历"], ["c", s.scored, "已评分"],
+    ["a", s.has_wechat, "已加微信"], ["d", s.interviewed, "已约面试"], ["c", s.today, "今日更新"],
   ];
   $("#statGrid").innerHTML = cards.map(([cls, n, lbl]) =>
     `<div class="stat ${cls}"><div class="num">${n ?? 0}</div><div class="lbl">${lbl}</div></div>`).join("");
@@ -61,42 +86,135 @@ async function loadBoard() {
   if (!d.ok) { list.innerHTML = `<div class="empty">${esc(d.reason || "暂无数据")}</div>`; return; }
   if (!d.top || !d.top.length) { list.innerHTML = '<div class="empty">还没有评分数据，先收集并评分。</div>'; return; }
   list.innerHTML = d.top.map((c, i) =>
-    `<div class="top-row"><span class="rk">${i + 1}</span>
+    `<button class="top-row" data-uid="${esc(c.uid)}"><span class="rk">${i + 1}</span>
       <span class="who"><strong>${esc(c.name)}</strong>
         <div class="meta">${esc(c.school || "—")} · ${esc(c.degree || "—")} · ${esc(c.job_position || "—")}</div></span>
-      <span class="sc">${Number(c.score || 0).toFixed(1)}</span></div>`).join("");
+      <span class="sc">${Number(c.score || 0).toFixed(1)}</span></button>`).join("");
+  $$("#topList .top-row").forEach((row) =>
+    row.addEventListener("click", () => openCandidate(row.dataset.uid)));
 }
 $("#refreshBoard").addEventListener("click", loadBoard);
 
+/* ── 候选人详情弹层 ── */
+let modalData = null;
+async function openCandidate(uid) {
+  if (!uid) return;
+  const modal = $("#candidateModal");
+  modal.hidden = false;
+  $("#modalBody").innerHTML = '<div class="empty">加载中…</div>';
+  const d = await api("/api/candidate?uid=" + encodeURIComponent(uid));
+  if (!d.ok) { $("#modalBody").innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  modalData = d;
+  const c = d.candidate;
+  $("#modalHead").innerHTML =
+    `<div class="mh-name">${esc(c.name)}<span class="mh-score">${Number(c.score || 0).toFixed(1)}</span></div>
+     <div class="mh-meta">${esc(c.school || "—")} · ${esc(c.degree || "—")} · 沟通岗位「${esc(c.job_position || "—")}」 · ${esc(c.status || "")}</div>`;
+  $$(".mtab").forEach((t, i) => t.classList.toggle("is-active", i === 0));
+  renderTab("info");
+}
+$("#modalTabs").addEventListener("click", (e) => {
+  const t = e.target.closest(".mtab");
+  if (!t) return;
+  $$(".mtab").forEach((x) => x.classList.toggle("is-active", x === t));
+  renderTab(t.dataset.tab);
+});
+function closeModal() { $("#candidateModal").hidden = true; modalData = null; }
+$("#closeModal").addEventListener("click", closeModal);
+$("#modalBackdrop").addEventListener("click", closeModal);
+
+function renderTab(tab) {
+  const d = modalData; if (!d) return;
+  const c = d.candidate, body = $("#modalBody");
+  if (tab === "info") {
+    const rows = [
+      ["姓名", c.name], ["学校", c.school], ["学历", c.degree], ["沟通岗位", c.job_position],
+      ["状态", c.status], ["微信", c.wechat], ["手机", c.phone], ["邮箱", c.email],
+      ["有简历", c.has_resume ? "是" : "否"], ["面试", [c.interview_type, c.interview_date, c.interview_time].filter(Boolean).join(" ")],
+      ["备注", c.notes], ["更新时间", c.updated_at],
+    ];
+    body.innerHTML = `<dl class="info-grid">${rows.map(([k, v]) =>
+      `<div><dt>${k}</dt><dd>${esc(v || "—")}</dd></div>`).join("")}</dl>`;
+  } else if (tab === "resume") {
+    if (d.has_pdf) {
+      body.innerHTML = `<iframe class="resume-frame" src="/api/resume?uid=${encodeURIComponent(c.uid)}"></iframe>
+        <p class="hint mt">解析文本 ${d.resume_text_len} 字（供 AI 评分）。</p>`;
+    } else if (d.resume_text_len) {
+      body.innerHTML = `<div class="resume-text">${esc(d.resume_text)}</div>
+        <p class="hint mt">无 PDF 附件，以下为解析/在线简历文本（${d.resume_text_len} 字）。</p>`;
+    } else {
+      body.innerHTML = '<div class="empty">这位候选人还没有简历附件或正文。</div>';
+    }
+  } else if (tab === "score") {
+    renderScore(body, d);
+  } else if (tab === "chat") {
+    if (!d.chat.length) { body.innerHTML = '<div class="empty">还没有聊天记录。</div>'; return; }
+    body.innerHTML = `<div class="chat-log inline">${d.chat.map((m) => {
+      const who = m.role === "boss" || m.role === "assistant" ? "user" : "bot";
+      return `<div class="msg ${who}"><div class="bubble">${esc(m.content || m.text || "")}</div></div>`;
+    }).join("")}</div>`;
+  }
+}
+
+function renderScore(body, d) {
+  const c = d.candidate, sl = d.scoring_logic || { dimensions: [] };
+  const logic = sl.dimensions.map((x) =>
+    `<div class="dim-row"><span class="dim-name">${esc(x.name)}</span>
+      <span class="dim-w">权重 ${x.weight}</span>
+      <span class="dim-desc">${esc(x.description || "")}</span></div>`).join("");
+  body.innerHTML = `
+    <div class="score-head">
+      <div class="score-big">${Number(c.score || 0).toFixed(1)}<small>/100</small></div>
+      <div class="score-sum">${esc(c.score_summary || "（暂无综合评价，可点『重新评分』现算）")}
+        <div class="hint mt">评分于 ${esc(c.scored_at || "未评分")}</div></div>
+    </div>
+    <div class="dim-block"><div class="dim-title">评分维度与权重 · 岗位「${esc(sl.job_id || "—")}」</div>${logic || '<div class="empty">无维度配置</div>'}</div>
+    <div class="run-actions"><span class="save-msg" id="rescoreMsg"></span>
+      <button class="primary" id="rescoreBtn">重新评分（现算每维度得分+依据）</button></div>
+    <div id="rescoreResult"></div>`;
+  $("#rescoreBtn").addEventListener("click", () => doRescore(c.uid));
+}
+
+async function doRescore(uid) {
+  const btn = $("#rescoreBtn"), msg = $("#rescoreMsg"), out = $("#rescoreResult");
+  btn.disabled = true; btn.textContent = "评分中（调 DeepSeek）…"; msg.textContent = "";
+  const r = await api("/api/candidate/rescore", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uid }),
+  });
+  btn.disabled = false; btn.textContent = "重新评分（现算每维度得分+依据）";
+  if (!r.ok) { msg.className = "save-msg err"; msg.textContent = r.error || "评分失败"; return; }
+  out.innerHTML = `<div class="dim-title mt">本次评分结果 · 总分 ${r.total}（岗位「${esc(r.job_id || "—")}」）</div>
+    ${r.dimensions.map((x) =>
+      `<div class="dim-score"><div class="dim-score-head"><b>${esc(x.name)}</b>
+        <span>${x.raw}/10 × 权重${x.weight} = <b>${x.weighted}</b></span></div>
+        <div class="dim-evidence">${esc(x.evidence || "")}</div></div>`).join("")}
+    <div class="score-sum mt">${esc(r.summary || "")}</div>`;
+  loadBoard();
+}
+
 /* ── 操作台 ── */
 const TASK_META = {
-  greet: { title: "打招呼", limit: 20, degree: true },
-  collect: { title: "收简历", limit: 20, degree: true },
-  chat: { title: "智能沟通", limit: 20, degree: true },
-  pipeline: { title: "全流程", pipeline: true },
+  greet: { title: "打招呼", limit: 20, degree: true }, collect: { title: "收简历", limit: 20, degree: true },
+  chat: { title: "智能沟通", limit: 20, degree: true }, pipeline: { title: "全流程", pipeline: true },
 };
-let currentTask = null, pollTimer = null, logCursor = 0, currentJob = null;
-
-$$(".act-card").forEach((card) =>
-  card.addEventListener("click", () => openRunConfig(card.dataset.task)));
-
+let currentTask = null, logCursor = 0, currentJob = null;
+$$(".act-card").forEach((card) => card.addEventListener("click", () => openRunConfig(card.dataset.task)));
 function openRunConfig(task) {
   currentTask = task;
   const m = TASK_META[task];
   $$(".act-card").forEach((c) => c.classList.toggle("is-selected", c.dataset.task === task));
   $("#runTitle").textContent = m.title + " · 配置";
-  let f = "";
-  if (m.pipeline) {
-    f = ["greet", "collect", "chat"].map((k) =>
-      `<label class="field"><span>${TASK_META[k].title}人数</span>
-        <input type="number" min="0" id="p_${k}" value="20" /></label>`).join("");
-  } else {
-    f = `<label class="field"><span>人数（limit）</span>
-      <input type="number" min="0" id="p_limit" value="${m.limit}" /></label>`;
-  }
+  // 打招呼人数：0 = 打到 BOSS 每日上限（不是「跳过」）。给 HR 用统一 min=1 防误触发大规模操作。
+  const numField = (k, label, isGreet) =>
+    `<label class="field"><span>${label}人数</span>
+      <input type="number" min="${isGreet ? 1 : 0}" id="${k}" value="20" />
+      ${isGreet ? '<em class="fhint">打招呼按成功人数计；想打到每日上限请填一个很大的数</em>' : ""}</label>`;
+  let f = m.pipeline
+    ? ["greet", "collect", "chat"].map((k) => numField(`p_${k}`, TASK_META[k].title, k === "greet")).join("")
+    : `<label class="field"><span>人数（limit）</span>
+        <input type="number" min="${currentTask === "greet" ? 1 : 0}" id="p_limit" value="${m.limit}" />
+        ${currentTask === "greet" ? '<em class="fhint">打招呼按成功人数计；想打到每日上限请填一个很大的数</em>' : ""}</label>`;
   if (m.degree || m.pipeline) {
-    f += `<label class="field"><span>最低学历</span>
-      <select id="p_degree"><option value="">不限</option>
+    f += `<label class="field"><span>最低学历</span><select id="p_degree"><option value="">不限</option>
       <option>大专</option><option>本科</option><option>硕士</option><option>博士</option></select></label>`;
   }
   $("#runFields").innerHTML = f;
@@ -107,18 +225,13 @@ $("#closeRun").addEventListener("click", () => {
   $("#runConfig").hidden = true;
   $$(".act-card").forEach((c) => c.classList.remove("is-selected"));
 });
-
 $("#startRun").addEventListener("click", async () => {
   const m = TASK_META[currentTask];
   const params = { dry_run: $("#dryRun").checked };
-  if (m.pipeline) {
-    ["greet", "collect", "chat"].forEach((k) => (params[k] = +$(`#p_${k}`).value || 0));
-  } else {
-    params.limit = +$("#p_limit").value || 0;
-  }
+  if (m.pipeline) ["greet", "collect", "chat"].forEach((k) => (params[k] = +$(`#p_${k}`).value || 0));
+  else params.limit = +$("#p_limit").value || 0;
   const deg = $("#p_degree");
   if (deg && deg.value) params.min_degree = deg.value;
-
   const res = await api("/api/run", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ task: currentTask, params }),
@@ -130,35 +243,41 @@ $("#startRun").addEventListener("click", async () => {
   $("#consolePanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
   pollJob();
 });
-
 async function pollJob() {
   if (!currentJob) return;
   const st = await api(`/api/job/${currentJob}?since=${logCursor}`);
   if (st.ok) {
     if (st.log && st.log.length) {
       const c = $("#console");
-      c.textContent += st.log.join("\n") + "\n";
-      c.scrollTop = c.scrollHeight;
-      logCursor = st.next;
+      c.textContent += st.log.join("\n") + "\n"; c.scrollTop = c.scrollHeight; logCursor = st.next;
     }
     const badge = $("#runStatus");
     badge.textContent = { running: "运行中…", done: "✅ 完成", failed: "❌ 失败", stopped: "⏹ 已停止" }[st.status] || st.status;
     badge.className = "run-status " + st.status;
-    if (st.status === "running") { pollTimer = setTimeout(pollJob, 1200); return; }
+    if (st.status === "running") { setTimeout(pollJob, 1200); return; }
   }
   currentJob = null;
 }
-$("#stopRun").addEventListener("click", async () => {
-  if (currentJob) await api(`/api/job/${currentJob}/stop`, { method: "POST" });
-});
+$("#stopRun").addEventListener("click", async () => { if (currentJob) await api(`/api/job/${currentJob}/stop`, { method: "POST" }); });
 
 /* ── 问伯乐 ── */
 const history = [];
-$("#chatForm").addEventListener("submit", async (e) => {
+const STARTER_CHIPS = ["帮我跑一遍今天的招聘流程", "打招呼 20 人", "看看谁最合适", "收 30 份简历", "同步一下岗位"];
+const FOLLOWUP_CHIPS = ["那就开始吧", "换个方向", "谁最合适？", "帮我约面试"];
+
+function renderChips(items) {
+  const box = $("#chatChips");
+  box.innerHTML = items.map((t) => `<button class="chip">${esc(t)}</button>`).join("");
+  $$(".chip", box).forEach((c) => c.addEventListener("click", () => sendChat(c.textContent)));
+}
+$("#chatForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const input = $("#chatText"), text = input.value.trim();
-  if (!text) return;
-  input.value = "";
+  const text = $("#chatText").value.trim();
+  if (text) sendChat(text);
+});
+async function sendChat(text) {
+  $("#chatText").value = "";
+  $("#chatChips").innerHTML = "";
   addMsg("user", text);
   const think = addMsg("bot thinking", "伯乐思考中…");
   const res = await api("/api/bole", {
@@ -170,16 +289,18 @@ $("#chatForm").addEventListener("submit", async (e) => {
     addMsg("bot", res.reply);
     history.push({ role: "user", content: text }, { role: "assistant", content: res.reply });
     if (history.length > 40) history.splice(0, history.length - 40);
+    renderChips(FOLLOWUP_CHIPS);
   } else {
     addMsg("bot", "⚠ " + (res.error || "调用失败") + "（去『设置』确认 DeepSeek Key）");
+    renderChips(STARTER_CHIPS);
   }
-});
+}
+renderChips(STARTER_CHIPS);
 function addMsg(cls, text) {
   const el = document.createElement("div");
   el.className = "msg " + cls;
   el.innerHTML = `<div class="bubble">${esc(text)}</div>`;
-  const log = $("#chatLog");
-  log.appendChild(el); log.scrollTop = log.scrollHeight;
+  const log = $("#chatLog"); log.appendChild(el); log.scrollTop = log.scrollHeight;
   return el;
 }
 
@@ -194,26 +315,26 @@ async function loadConfig() {
   $("#keyState").textContent = c.deepseek_key_set ? "已配置" : "未配置 · 智能回复将降级";
 }
 $("#saveConfig").addEventListener("click", async () => {
-  const body = {
-    deepseek_api_key: $("#dsKey").value.trim(),
-    deepseek_model: $("#dsModel").value.trim(),
-    deepseek_base_url: $("#dsBase").value.trim(),
-    cloud_sync: $("#cloudSync").value,
-  };
   const msg = $("#saveMsg");
   const res = await api("/api/config", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      deepseek_api_key: $("#dsKey").value.trim(), deepseek_model: $("#dsModel").value.trim(),
+      deepseek_base_url: $("#dsBase").value.trim(), cloud_sync: $("#cloudSync").value,
+    }),
   });
-  if (res.ok) {
-    msg.className = "save-msg"; msg.textContent = "已保存 ✓";
-    $("#dsKey").value = "";
-    loadConfig(); loadDoctor();
-  } else {
-    msg.className = "save-msg err"; msg.textContent = res.error || "保存失败";
-  }
+  if (res.ok) { msg.className = "save-msg"; msg.textContent = "已保存 ✓"; $("#dsKey").value = ""; loadConfig(); loadDoctor(); }
+  else { msg.className = "save-msg err"; msg.textContent = res.error || "保存失败"; }
   setTimeout(() => (msg.textContent = ""), 3000);
+});
+$("#testConfig").addEventListener("click", async () => {
+  const msg = $("#saveMsg"), btn = $("#testConfig");
+  btn.disabled = true; btn.textContent = "测试中…"; msg.className = "save-msg"; msg.textContent = "";
+  const r = await api("/api/config/test", { method: "POST" });
+  btn.disabled = false; btn.textContent = "测试连接";
+  if (r.ok) { msg.className = "save-msg"; msg.textContent = `✓ 连接正常，DeepSeek 回复「${r.sample}」`; }
+  else { msg.className = "save-msg err"; msg.textContent = "✗ " + (r.error || "连接失败"); }
 });
 
 /* 启动 */
-loadDoctor();
-loadBoard();
+boot();

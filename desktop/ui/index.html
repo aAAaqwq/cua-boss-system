@@ -7,15 +7,27 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="app">
-    <!-- 侧栏 -->
+  <!-- 登录门禁：未登录时铺满，挡住主界面 -->
+  <div class="login-screen" id="loginScreen" hidden>
+    <div class="login-card">
+      <div class="brand-mark lg">伯</div>
+      <h1>伯乐</h1>
+      <p class="login-sub">AI 招聘助手 · 请先登录你的账号</p>
+      <form id="loginForm">
+        <input id="loginEmail" type="email" placeholder="邮箱" autocomplete="username" />
+        <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password" />
+        <button class="primary block" type="submit" id="loginBtn">登录</button>
+        <div class="login-err" id="loginErr"></div>
+      </form>
+      <p class="login-foot">登录态用于云同步与许可门禁，仅存本机 <code>data/.cloud_auth.json</code>。</p>
+    </div>
+  </div>
+
+  <div class="app" id="app" hidden>
     <aside class="rail">
       <div class="brand">
         <div class="brand-mark">伯</div>
-        <div class="brand-text">
-          <strong>伯乐</strong>
-          <span>AI 招聘助手</span>
-        </div>
+        <div class="brand-text"><strong>伯乐</strong><span>AI 招聘助手</span></div>
       </div>
       <nav class="nav" id="nav">
         <button class="nav-item is-active" data-view="board">看板</button>
@@ -24,38 +36,30 @@
         <button class="nav-item" data-view="settings">设置</button>
       </nav>
       <div class="rail-foot">
-        <div class="health-pill" id="healthPill" title="装机自检">
-          <span class="dot"></span><span id="healthText">自检中…</span>
-        </div>
+        <div class="health-pill" id="healthPill" title="装机自检"><span class="dot"></span><span id="healthText">自检中…</span></div>
+        <div class="user-row"><span id="userEmail" class="user-email">—</span>
+          <button class="link-btn" id="logoutBtn">退出</button></div>
       </div>
     </aside>
 
-    <!-- 主区 -->
     <main class="stage">
       <!-- 看板 -->
       <section class="view is-active" data-view="board">
         <header class="view-head">
-          <div>
-            <h1>看板</h1>
-            <p class="sub">一眼看清你的人才漏斗与最值得约的人。</p>
-          </div>
+          <div><h1>看板</h1><p class="sub">一眼看清人才漏斗；点候选人卡片看完整档案。</p></div>
           <button class="ghost" id="refreshBoard">刷新</button>
         </header>
         <div class="stat-grid" id="statGrid"></div>
         <div class="panel">
-          <div class="panel-head"><h2>评分榜 · Top 8</h2><span class="hint">按简历 AI 评分</span></div>
+          <div class="panel-head"><h2>评分榜 · Top 8</h2><span class="hint">按简历 AI 评分 · 点击看详情</span></div>
           <div id="topList" class="top-list"><div class="empty">加载中…</div></div>
         </div>
       </section>
 
       <!-- 操作台 -->
       <section class="view" data-view="run">
-        <header class="view-head">
-          <div>
-            <h1>操作台</h1>
-            <p class="sub">选一步，或一键全流程。任务会驱动 Chrome，请先在自检里确认前置。</p>
-          </div>
-        </header>
+        <header class="view-head"><div><h1>操作台</h1>
+          <p class="sub">选一步，或一键全流程。任务会驱动 Chrome，请先在自检里确认前置。</p></div></header>
         <div class="run-grid">
           <button class="act-card" data-task="greet"><b>打招呼</b><span>推荐页批量主动打招呼</span></button>
           <button class="act-card" data-task="collect"><b>收简历</b><span>沟通页收集简历+微信入库</span></button>
@@ -63,8 +67,7 @@
           <button class="act-card is-primary" data-task="pipeline"><b>全流程</b><span>打招呼→收集→沟通一条龙</span></button>
         </div>
         <div class="panel run-config" id="runConfig" hidden>
-          <div class="panel-head"><h2 id="runTitle">配置</h2>
-            <button class="x" id="closeRun">×</button></div>
+          <div class="panel-head"><h2 id="runTitle">配置</h2><button class="x" id="closeRun">×</button></div>
           <div class="fields" id="runFields"></div>
           <div class="run-actions">
             <label class="check"><input type="checkbox" id="dryRun" /> 预览（dry-run，不真的操作）</label>
@@ -80,16 +83,12 @@
 
       <!-- 问伯乐 -->
       <section class="view" data-view="bole">
-        <header class="view-head">
-          <div>
-            <h1>问伯乐</h1>
-            <p class="sub">用大白话说需求，伯乐替你想下一步。</p>
-          </div>
-        </header>
+        <header class="view-head"><div><h1>问伯乐</h1><p class="sub">用大白话说需求，伯乐替你想下一步。</p></div></header>
         <div class="chat">
           <div class="chat-log" id="chatLog">
-            <div class="msg bot"><div class="bubble">你好，我是伯乐。想让我帮你打招呼、收简历，还是看看谁最合适？直接说就行。</div></div>
+            <div class="msg bot"><div class="bubble">你好，我是伯乐。想让我帮你打招呼、收简历，还是看看谁最合适？直接说，或点下面的按钮。</div></div>
           </div>
+          <div class="chips" id="chatChips"></div>
           <form class="chat-input" id="chatForm">
             <input id="chatText" placeholder="例如：帮我跑一遍今天的招聘流程" autocomplete="off" />
             <button class="primary" type="submit">发送</button>
@@ -99,47 +98,51 @@
 
       <!-- 设置 -->
       <section class="view" data-view="settings">
-        <header class="view-head">
-          <div>
-            <h1>设置</h1>
-            <p class="sub">DeepSeek 决定智能回复与评分质量；不配则降级为模板原文。</p>
-          </div>
-        </header>
+        <header class="view-head"><div><h1>设置</h1>
+          <p class="sub">DeepSeek 决定智能回复与评分质量；不配则降级为模板原文。</p></div></header>
         <div class="panel">
           <div class="panel-head"><h2>DeepSeek API</h2><span class="hint" id="keyState"></span></div>
           <div class="fields">
-            <label class="field">
-              <span>API Key</span>
-              <input id="dsKey" type="password" placeholder="sk-…（留空表示不改动）" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>模型</span>
-              <input id="dsModel" placeholder="deepseek-chat" />
-            </label>
-            <label class="field">
-              <span>接口地址</span>
-              <input id="dsBase" placeholder="https://api.deepseek.com" />
-            </label>
-            <label class="field">
-              <span>云同步</span>
+            <label class="field"><span>API Key</span>
+              <input id="dsKey" type="password" placeholder="sk-…（留空表示不改动）" autocomplete="off" /></label>
+            <label class="field"><span>模型</span><input id="dsModel" placeholder="deepseek-chat" /></label>
+            <label class="field"><span>接口地址</span><input id="dsBase" placeholder="https://api.deepseek.com" /></label>
+            <label class="field"><span>云同步</span>
               <select id="cloudSync">
                 <option value="on">开启（脱敏数据同步到你的租户）</option>
                 <option value="off">关闭（仅本地）</option>
-              </select>
-            </label>
+              </select></label>
           </div>
           <div class="run-actions">
             <span class="save-msg" id="saveMsg"></span>
-            <button class="primary" id="saveConfig">保存</button>
+            <div class="btn-row">
+              <button class="ghost" id="testConfig">测试连接</button>
+              <button class="primary" id="saveConfig">保存</button>
+            </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><h2>装机自检</h2>
-            <button class="ghost sm" id="recheck">重新自检</button></div>
+          <div class="panel-head"><h2>装机自检 · 真实检查</h2><button class="ghost sm" id="recheck">重新自检</button></div>
           <div id="doctorList" class="doctor-list"><div class="empty">自检中…</div></div>
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- 候选人详情弹层 -->
+  <div class="modal" id="candidateModal" hidden>
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-card">
+      <button class="x modal-x" id="closeModal">×</button>
+      <div class="modal-head" id="modalHead"></div>
+      <div class="modal-tabs" id="modalTabs">
+        <button class="mtab is-active" data-tab="info">个人信息</button>
+        <button class="mtab" data-tab="resume">简历预览</button>
+        <button class="mtab" data-tab="score">AI 评分</button>
+        <button class="mtab" data-tab="chat">聊天记录</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
   </div>
   <script src="app.js"></script>
 </body>
