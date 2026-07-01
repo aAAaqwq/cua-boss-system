@@ -27,6 +27,7 @@ from desktop import services as S  # noqa: E402
 UI_DIR = Path(__file__).parent / "ui"
 _CTYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
            ".js": "application/javascript; charset=utf-8", ".svg": "image/svg+xml"}
+_SRV = None  # 供 /api/shutdown 优雅停服（在主循环里赋值）
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -155,13 +156,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json(S.rescore(body.get("uid", "")))
         elif path == "/api/run":
             self._json(S.launch_job(body.get("task", ""), body.get("params", {})))
+        elif path == "/api/shutdown":
+            self._json({"ok": True})
+            # 先杀在跑的子进程再停服；另起线程避免在处理线程里等自身
+            threading.Thread(target=_do_shutdown, daemon=True).start()
         elif path.startswith("/api/job/") and path.endswith("/stop"):
             self._json(S.stop_job(path.split("/")[3]))
         else:
             self._json({"ok": False, "error": "未知接口"}, 404)
 
 
+def _do_shutdown() -> None:
+    """优雅停服：先杀在跑的自动化子进程，再停 HTTP 循环。"""
+    S.terminate_all_jobs()
+    if _SRV is not None:
+        _SRV.shutdown()
+
+
 def main() -> None:
+    global _SRV
     p = argparse.ArgumentParser(description="伯乐桌面端本地服务")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--host", default="127.0.0.1")
@@ -180,6 +193,7 @@ def main() -> None:
         print(f"❌ {args.host}:{args.port}~{args.port + 11} 都被占用了。"
               f"伯乐可能已在运行——去浏览器看看，或换 --port。")
         sys.exit(1)
+    _SRV = srv
 
     url = f"http://{args.host}:{srv.server_address[1]}/"
     print(f"🎯 伯乐桌面端已启动 → {url}")

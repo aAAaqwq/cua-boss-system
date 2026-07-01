@@ -31,8 +31,18 @@ $("#loginForm").addEventListener("submit", async (e) => {
   else err.textContent = res.error || "登录失败";
 });
 $("#logoutBtn").addEventListener("click", async () => {
-  await api("/api/auth/logout", { method: "POST" });
+  await api("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   showLogin();
+});
+$("#quitBtn").addEventListener("click", async () => {
+  if (!confirm("关闭伯乐？正在跑的任务会一并停止。")) return;
+  try {
+    await api("/api/shutdown", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  } catch (_) { /* 服务已停，忽略 */ }
+  document.body.innerHTML =
+    '<div style="height:100vh;display:grid;place-items:center;font:16px -apple-system;color:#555">' +
+    '伯乐已关闭，可以关掉此窗口了。</div>';
+  setTimeout(() => window.close(), 400);
 });
 
 /* ── 视图切换 ── */
