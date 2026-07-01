@@ -317,6 +317,16 @@ def bole_reply(message: str, history: list[dict]) -> dict:
         return {"ok": False, "reply": "", "error": str(e)}
 
 
+def bole_suggest(history: list[dict], reply: str) -> dict:
+    """基于伯乐最新回复动态生成快捷回复 chips（单独接口，不拖慢主回复显示）。"""
+    try:
+        from app.bole_agent import suggest_replies
+        msgs = [m for m in history if m.get("role") in ("user", "assistant")][-6:]
+        return {"ok": True, "suggestions": suggest_replies(msgs, reply)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "suggestions": [], "error": str(e)}
+
+
 # ────────────────────── 后台任务 ──────────────────────
 def run_subcmd_json(rel: str, args: list[str], timeout: int = 30) -> dict:
     try:

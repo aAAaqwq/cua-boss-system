@@ -108,3 +108,34 @@ def ask(question: str, history: Optional[list[dict]] = None
     """单轮便捷封装（可带历史）。"""
     msgs = list(history or []) + [{"role": "user", "content": question}]
     return chat(msgs)
+
+
+_SUGGEST_SYSTEM = (
+    "你是招聘助手对话的『快捷回复』生成器。站在 HR（用户）角度，"
+    "针对伯乐刚说的话，给出 2-4 个最可能的下一步简短回复。"
+    "要求：每个 ≤10 字、口语化、可直接点发；紧扣伯乐的话（他若在问选择/确认，就给对应选项）。"
+    "只输出 JSON 字符串数组，例如 [\"好，开始吧\",\"先看简历\"]，不要任何多余文字或解释。"
+)
+
+
+def suggest_replies(history: Optional[list[dict]], reply: str) -> list[str]:
+    """根据对话与伯乐最新回复，动态生成 HR 可能点的快捷回复。失败/未配置返回 []。"""
+    if not reply or not _cfg().get("api_key"):
+        return []
+    ctx = ""
+    for m in (history or [])[-4:]:
+        role = "用户" if m.get("role") == "user" else "伯乐"
+        ctx += f"{role}：{str(m.get('content', ''))[:120]}\n"
+    prompt = f"对话上文：\n{ctx}\n伯乐最新回复：{reply[:600]}\n\n给出快捷回复 JSON 数组："
+    text, _ = chat([{"role": "user", "content": prompt}], system=_SUGGEST_SYSTEM,
+                   max_tokens=120, temperature=0.5)
+    if not text:
+        return []
+    try:
+        import re
+        m = re.search(r"\[.*\]", text, re.S)
+        arr = json.loads(m.group(0)) if m else []
+        out = [str(x).strip()[:16] for x in arr if str(x).strip()]
+        return out[:4]
+    except Exception:  # noqa: BLE001 生成失败就不给动态建议，前端有兜底
+        return []

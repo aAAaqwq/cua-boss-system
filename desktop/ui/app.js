@@ -311,11 +311,25 @@ async function sendChat(text) {
     addMsg("bot", res.reply);
     history.push({ role: "user", content: text }, { role: "assistant", content: res.reply });
     if (history.length > 40) history.splice(0, history.length - 40);
-    renderChips(FOLLOWUP_CHIPS);
+    loadSuggestions(res.reply);   // 动态：让伯乐按这次回复生成快捷选项
   } else {
     addMsg("bot", "⚠ " + (res.error || "调用失败") + "（去『设置』确认 DeepSeek Key）");
     renderChips(STARTER_CHIPS);
   }
+}
+
+// 回复已显示后，异步取「结合本次回复」的动态快捷回复（不拖慢正文）
+async function loadSuggestions(reply) {
+  $("#chatChips").innerHTML = '<span class="chips-loading">生成建议…</span>';
+  let suggestions = [];
+  try {
+    const s = await api("/api/bole/suggest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history, reply }),
+    });
+    suggestions = (s && s.suggestions) || [];
+  } catch (_) { /* 忽略，走兜底 */ }
+  renderChips(suggestions.length ? suggestions : FOLLOWUP_CHIPS);
 }
 function nowHM() {
   const d = new Date();

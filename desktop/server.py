@@ -149,6 +149,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if path == "/api/bole":
             self._json(S.bole_reply(body.get("message", ""), body.get("history", [])))
+        elif path == "/api/bole/suggest":
+            self._json(S.bole_suggest(body.get("history", []), body.get("reply", "")))
         elif path == "/api/config":
             self._json(S.save_config(body))
         elif path == "/api/config/test":
