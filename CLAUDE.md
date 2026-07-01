@@ -234,6 +234,8 @@ python scripts/query_db.py --rank --job-id "全栈开发"  # 强制指定岗位(
 
 ## 桌面端 (desktop/ — P2 产品化)
 
+> 面向用户的完整使用说明见 [docs/桌面端使用.md](docs/桌面端使用.md)（含「执行端代码在不在安装包里」的说明）。
+
 给不懂技术的 HR 的图形界面。**本地 Web App**：一个只绑 `127.0.0.1` 的纯标准库 HTTP 服务，把浏览器 UI 桥接到既有脚本与 `candidates.db`。**就是将来 Tauri 壳的 WebView 前端**(打包时直接复用 `desktop/ui` 与 `/api` 接口，不重写)。
 
 ```bash
