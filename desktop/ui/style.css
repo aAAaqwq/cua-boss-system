@@ -247,6 +247,7 @@ body {
 .fix-result .fx { font-size: 13px; color: var(--ink-soft); }
 .fix-result .fx.ok { color: var(--jade-deep); }
 .fix-result .fx.warn { color: var(--amber); }
+.fix-result .fx.err { color: var(--rose); }
 .fix-result .fx a { color: var(--jade-deep); text-decoration: none; font-weight: 500; }
 .fix-result .fx a:hover { text-decoration: underline; }
 .fix-result .fx code { background: var(--paper); padding: 1px 6px; border-radius: 4px; font-size: 12px; }

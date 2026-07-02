@@ -113,7 +113,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/resume":
                 self._serve_resume(self._qs("uid"))
             elif path.startswith("/api/job/"):
-                self._json(S.job_state(path.rsplit("/", 1)[-1], int(self._qs("since", "0") or 0)))
+                try:
+                    since = int(self._qs("since", "0") or 0)
+                except ValueError:
+                    since = 0
+                self._json(S.job_state(path.rsplit("/", 1)[-1], since))
             else:
                 self._json({"ok": False, "error": "未知接口"}, 404)
             return

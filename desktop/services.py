@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).parent.parent
 DB_PATH = ROOT / "data" / "candidates.db"
@@ -96,8 +98,11 @@ def save_config(body: dict) -> dict:
             os.environ["DEEPSEEK_MODEL"] = model
         base = _clean_env_value((body.get("deepseek_base_url") or "").strip())
         if base:
-            if not base.startswith("https://"):
-                return {"ok": False, "error": "接口地址必须以 https:// 开头"}
+            host = (urlparse(base).hostname or "").lower()
+            # 白名单：只放行 https + deepseek.com（防把带 key 的请求指到攻击者端点）。
+            # 高级用户要用别的兼容端点，请直接改 .env。
+            if urlparse(base).scheme != "https" or not (host == "deepseek.com" or host.endswith(".deepseek.com")):
+                return {"ok": False, "error": "接口地址只允许 https 的 deepseek.com 域名（其他端点请手改 .env）"}
             updates["DEEPSEEK_BASE_URL"] = base
             os.environ["DEEPSEEK_BASE_URL"] = base
     except ValueError as e:
@@ -313,14 +318,34 @@ _TOOL_LABELS = {
 }
 
 
+# 只有用户在【本轮消息】里明确确认，才允许伯乐真实执行动作类工具（否则一律预览）。
+# 关键：确认词只能来自用户消息，候选人简历/DB 里的注入文本无法伪造 → 阻断间接提示注入误操作。
+_CONFIRM_RE = re.compile(
+    r"(真跑|真的跑|直接跑|开始执行|立即执行|立刻执行|别预览|不用预览|确认执行|执行吧|真执行|就这么(办|干))")
+
+
+def _user_confirmed(msg: str) -> bool:
+    return bool(_CONFIRM_RE.search(msg or ""))
+
+
 def bole_reply(message: str, history: list[dict]) -> dict:
     """伯乐 agent：可调用真实工具（读库/跑脚本/约面试）后再作答。"""
     try:
         from app.bole_agent import run_agent
-        from desktop.bole_tools import TOOLS, execute
+        from desktop import bole_tools as bt
         msgs = [m for m in history if m.get("role") in ("user", "assistant")][-20:]
         msgs.append({"role": "user", "content": message})
-        reply, actions, err = run_agent(msgs, TOOLS, execute)
+        confirmed = _user_confirmed(message)
+        real_budget = [1 if confirmed else 0]   # 本轮最多允许 1 次真实动作，防连环误触发
+
+        def execute(name: str, args: dict) -> str:
+            allow = False
+            if confirmed and name in ("run_task", "schedule_interview") and real_budget[0] > 0:
+                allow = True
+                real_budget[0] -= 1
+            return bt.execute(name, args, allow_real=allow)
+
+        reply, actions, err = run_agent(msgs, bt.TOOLS, execute)
         # 动作摘要（去重，给前端做透明化展示：伯乐真的做了什么）
         acted = []
         for a in actions:
@@ -363,12 +388,15 @@ def launch_job(task: str, params: dict) -> dict:
     # -u 无缓冲：子脚本 print 到管道默认块缓冲，会导致日志攒到最后才出；
     # 加 -u 让 stdout 实时逐行刷出，操作台才能真正「实时」看到执行输出。
     cmd = [PY, "-u", str(ROOT / rel)]
-    if task == "pipeline":
-        for k in ("greet", "collect", "chat"):
-            if params.get(k) is not None:
-                cmd += [f"--{k}", str(int(params[k]))]
-    elif limit_flag is not None and params.get("limit") is not None:
-        cmd += [limit_flag, str(int(params["limit"]))]
+    try:
+        if task == "pipeline":
+            for k in ("greet", "collect", "chat"):
+                if params.get(k) is not None:
+                    cmd += [f"--{k}", str(int(params[k]))]
+        elif limit_flag is not None and params.get("limit") is not None:
+            cmd += [limit_flag, str(int(params["limit"]))]
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "人数必须是整数"}
     if params.get("min_degree") in ("大专", "本科", "硕士", "博士"):
         cmd += ["--min-degree", params["min_degree"]]
     if params.get("dry_run"):

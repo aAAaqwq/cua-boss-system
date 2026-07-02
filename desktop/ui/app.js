@@ -4,7 +4,8 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const api = async (path, opts) => (await fetch(path, opts)).json();
-const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ── 登录门禁 ── */
 async function boot() {
@@ -117,11 +118,12 @@ $("#fixBtn").addEventListener("click", async () => {
   btn.disabled = false; btn.textContent = "一键修复";
   box.hidden = false;
   const fixed = (r.fixed || []).map((f) => `<div class="fx ok">✅ 已自动生成 ${esc(f)}</div>`).join("");
+  const still = (r.still || []).map((s) => `<div class="fx err">❌ 自动修复失败：${esc(s)}（请联系技术支持）</div>`).join("");
   const inst = (r.manual_install || []).map((m) => `<div class="fx warn">⚠️ 需手动装 <b>${esc(m.name)}</b>：<code>${esc(m.how)}</code></div>`).join("");
   const perms = (r.perm_links || []).map((p) =>
     `<div class="fx"><a href="${esc(p.url)}">🔗 打开「${esc(p.name)}」设置 →</a></div>`).join("");
   box.innerHTML =
-    (fixed || '<div class="fx">没有可自动生成的缺失配置。</div>') +
+    (fixed || (still ? "" : '<div class="fx">没有可自动生成的缺失配置。</div>')) + still +
     (inst ? `<div class="fx-h">需你手动安装：</div>${inst}` : "") +
     `<div class="fx-h">需你手动授权（macOS 不允许程序自行授予，点开设置里勾选）：</div>${perms}` +
     `<div class="fx">ℹ️ DeepSeek Key 在上方「DeepSeek API」里填。</div>`;
