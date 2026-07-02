@@ -243,6 +243,14 @@ body {
 .save-msg.err { color: var(--rose); }
 
 /* 自检列表 */
+.fix-result { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.fix-result .fx { font-size: 13px; color: var(--ink-soft); }
+.fix-result .fx.ok { color: var(--jade-deep); }
+.fix-result .fx.warn { color: var(--amber); }
+.fix-result .fx a { color: var(--jade-deep); text-decoration: none; font-weight: 500; }
+.fix-result .fx a:hover { text-decoration: underline; }
+.fix-result .fx code { background: var(--paper); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.fix-result .fx-h { font-size: 12px; color: var(--ink-faint); margin-top: 8px; font-weight: 600; }
 .doctor-list { display: flex; flex-direction: column; gap: 2px; }
 .dr-row { display: flex; align-items: center; gap: 11px; padding: 9px 4px; border-top: 1px solid var(--line); font-size: 14px; }
 .dr-row:first-child { border-top: 0; }

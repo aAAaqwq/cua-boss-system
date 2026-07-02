@@ -101,11 +101,85 @@ MANUAL = [
     "跑长任务/定时时：电脑保持开机登录、关闭自动睡眠",
 ]
 
+# 缺失即可从模板自动生成的配置
+_CONFIG_TEMPLATES = {
+    "config/jobs.json": "config/jobs-template.json",
+    "config/reply.json": "config/reply-templates.json",
+    "config/filter.json": "config/filter-template.json",
+    "config/scoring.json": "config/scoring-template.json",
+}
+# macOS TCC 权限：程序【不能】自行授予（SIP/TCC 设计），只能深链到设置面板由用户手动开
+_PERM_LINKS = [
+    {"name": "辅助功能（Accessibility）",
+     "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},
+    {"name": "屏幕录制（Screen Recording）",
+     "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"},
+    {"name": "自动化（Apple 事件）",
+     "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"},
+]
+
+
+def fix() -> dict:
+    """自动修可自动修的：缺失配置从模板生成。返回结果 + 仍需人工的项（权限深链/安装命令）。
+
+    注意：macOS 权限（辅助功能/屏幕录制/自动化）程序无法自行授予，只能深链引导；
+    cua-driver 二进制来源未内置，Chrome 给命令，均不静默安装（避免擅自改机器）。
+    DeepSeek Key 到桌面端「设置」页填。
+    """
+    fixed, still = [], []
+    for tgt, tpl in _CONFIG_TEMPLATES.items():
+        p, t = ROOT / tgt, ROOT / tpl
+        if p.exists():
+            continue
+        if not t.exists():
+            still.append(f"{tgt}: 模板 {tpl} 也不存在")
+            continue
+        try:
+            p.write_text(t.read_text(encoding="utf-8"), encoding="utf-8")
+            fixed.append(f"{tgt} ← {tpl}")
+        except Exception as e:  # noqa: BLE001
+            still.append(f"{tgt} 生成失败: {e}")
+
+    manual_install = []
+    if not shutil.which("cua-driver"):
+        manual_install.append({"name": "cua-driver",
+                               "how": "按官方说明装其二进制到 PATH（本项目不内置安装源）"})
+    if not Path("/Applications/Google Chrome.app").exists():
+        how = "brew install --cask google-chrome" if shutil.which("brew") else "从 google.com/chrome 下载"
+        manual_install.append({"name": "Google Chrome", "how": how})
+
+    return {"ok": True, "fixed": fixed, "still": still,
+            "perm_links": _PERM_LINKS, "manual_install": manual_install}
+
 
 def main() -> None:
     p = argparse.ArgumentParser(description="装机自检（前置就绪体检）")
     p.add_argument("--json", action="store_true", help="JSON 输出")
+    p.add_argument("--fix", action="store_true", help="自动修可修项(缺失配置从模板生成)+列出需人工的权限/安装")
     args = p.parse_args()
+
+    if args.fix:
+        r = fix()
+        if args.json:
+            print(json.dumps(r, ensure_ascii=False))
+            sys.exit(0)
+        print("=" * 56 + "\n  伯乐 · 一键修复\n" + "=" * 56)
+        for f in r["fixed"]:
+            print(f"  ✅ 已生成 {f}")
+        if not r["fixed"]:
+            print("  （没有可自动生成的缺失配置）")
+        for s in r["still"]:
+            print(f"  ⚠️  {s}")
+        if r["manual_install"]:
+            print("\n  ── 需你手动安装 ──")
+            for m in r["manual_install"]:
+                print(f"  ◻︎ {m['name']}: {m['how']}")
+        print("\n  ── 需你手动授权（macOS 不允许程序自行授予）──")
+        for pl in r["perm_links"]:
+            print(f"  ◻︎ {pl['name']}\n     {pl['url']}")
+        print("  ℹ️  DeepSeek Key 到桌面端「设置」页填。")
+        print("=" * 56)
+        sys.exit(0)
 
     checks = run_checks()
     crit_fail = [c for c in checks if c["critical"] and not c["ok"]]

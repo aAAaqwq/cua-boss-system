@@ -155,6 +155,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(S.save_config(body))
         elif path == "/api/config/test":
             self._json(S.test_deepseek())
+        elif path == "/api/doctor/fix":
+            self._json(S.run_subcmd_json("scripts/doctor.py", ["--fix", "--json"]))
         elif path == "/api/candidate/rescore":
             self._json(S.rescore(body.get("uid", "")))
         elif path == "/api/run":

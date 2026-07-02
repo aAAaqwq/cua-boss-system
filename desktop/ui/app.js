@@ -91,6 +91,23 @@ async function loadDoctor() {
   list.innerHTML = html;
 }
 $("#recheck").addEventListener("click", loadDoctor);
+$("#fixBtn").addEventListener("click", async () => {
+  const box = $("#fixResult"), btn = $("#fixBtn");
+  btn.disabled = true; btn.textContent = "修复中…";
+  const r = await api("/api/doctor/fix", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  btn.disabled = false; btn.textContent = "一键修复";
+  box.hidden = false;
+  const fixed = (r.fixed || []).map((f) => `<div class="fx ok">✅ 已自动生成 ${esc(f)}</div>`).join("");
+  const inst = (r.manual_install || []).map((m) => `<div class="fx warn">⚠️ 需手动装 <b>${esc(m.name)}</b>：<code>${esc(m.how)}</code></div>`).join("");
+  const perms = (r.perm_links || []).map((p) =>
+    `<div class="fx"><a href="${esc(p.url)}">🔗 打开「${esc(p.name)}」设置 →</a></div>`).join("");
+  box.innerHTML =
+    (fixed || '<div class="fx">没有可自动生成的缺失配置。</div>') +
+    (inst ? `<div class="fx-h">需你手动安装：</div>${inst}` : "") +
+    `<div class="fx-h">需你手动授权（macOS 不允许程序自行授予，点开设置里勾选）：</div>${perms}` +
+    `<div class="fx">ℹ️ DeepSeek Key 在上方「DeepSeek API」里填。</div>`;
+  loadDoctor();
+});
 
 /* ── 看板 ── */
 async function loadBoard() {
