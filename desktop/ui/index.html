@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<!-- 伯乐 AI 招聘助手 · © 2026 Daniel Li (Open CAIO) · 版权所有 All rights reserved. -->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>伯乐 · AI 招聘助手</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 登录门禁：未登录时铺满，挡住主界面 -->
+  <div class="login-screen" id="loginScreen" hidden>
+    <div class="login-card">
+      <div class="brand-mark lg">伯</div>
+      <h1>伯乐</h1>
+      <p class="login-sub">AI 招聘助手 · 请先登录你的账号</p>
+      <form id="loginForm">
+        <input id="loginEmail" type="email" placeholder="邮箱" autocomplete="username" />
+        <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password" />
+        <label class="consent">
+          <input type="checkbox" id="agreeTerms" />
+          <span>我已阅读并同意
+            <button type="button" class="link-inline" id="showTerms">《隐私与数据安全条款》</button></span>
+        </label>
+        <button class="primary block" type="submit" id="loginBtn" disabled>登录</button>
+        <div class="login-err" id="loginErr"></div>
+      </form>
+      <p class="login-foot">登录态用于云同步与许可门禁，仅存本机 <code>data/.cloud_auth.json</code>。</p>
+      <p class="powered">powered by <strong>Open CAIO · Daniel Li</strong> · © 2026</p>
+    </div>
+  </div>
+
+  <!-- 隐私与数据安全条款 -->
+  <div class="terms-overlay" id="termsOverlay" hidden>
+    <div class="terms-card">
+      <h3>隐私与数据安全条款</h3>
+      <ul>
+        <li><b>人在环路</b>：本工具为招聘官<strong>辅助</strong>工具，所有自动化操作以你的人工确认为准。</li>
+        <li><b>合法授权</b>：你须自行确保对候选人数据拥有合法采集与处理的授权，并对使用后果负责。</li>
+        <li><b>数据本地优先</b>：候选人个人信息默认仅存本机；开启云同步后，仅<strong>脱敏</strong>数据同步到你的专属租户（RLS 行级隔离，互不可见）。</li>
+        <li><b>使用即同意</b>：登录并使用本工具即视为同意本条款；不同意请勿使用。</li>
+        <li>完整说明见项目文档《数据安全说明》。</li>
+      </ul>
+      <button class="primary block" id="closeTerms">我已了解</button>
+      <p class="powered">powered by <strong>Open CAIO · Daniel Li</strong></p>
+    </div>
+  </div>
+
+  <div class="app" id="app" hidden>
+    <aside class="rail">
+      <div class="brand">
+        <div class="brand-mark">伯</div>
+        <div class="brand-text"><strong>伯乐</strong><span>AI 招聘助手</span></div>
+      </div>
+      <nav class="nav" id="nav">
+        <button class="nav-item is-active" data-view="board">看板</button>
+        <button class="nav-item" data-view="run">操作台</button>
+        <button class="nav-item" data-view="bole">问伯乐</button>
+        <button class="nav-item" data-view="settings">设置</button>
+        <button class="nav-item guide-nav" id="guideBtn">📖 使用引导</button>
+      </nav>
+      <div class="rail-foot">
+        <div class="health-pill" id="healthPill" title="装机自检"><span class="dot"></span><span id="healthText">自检中…</span></div>
+        <div class="user-row"><span id="userEmail" class="user-email">—</span>
+          <button class="link-btn" id="logoutBtn">登出</button>
+          <button class="link-btn" id="quitBtn">关闭程序</button></div>
+        <div class="rail-powered">powered by <strong>Open CAIO · Daniel Li</strong> · © 2026</div>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <!-- 看板 -->
+      <section class="view is-active" data-view="board">
+        <header class="view-head">
+          <div><h1>看板</h1><p class="sub">一眼看清人才漏斗；点候选人卡片看完整档案。</p></div>
+          <button class="ghost" id="refreshBoard">刷新</button>
+        </header>
+        <div class="stat-grid" id="statGrid"></div>
+        <div class="panel">
+          <div class="panel-head"><h2>评分榜 · Top 8</h2><span class="hint">按简历 AI 评分 · 点击看详情</span></div>
+          <div id="topList" class="top-list"><div class="empty">加载中…</div></div>
+        </div>
+      </section>
+
+      <!-- 操作台 -->
+      <section class="view" data-view="run">
+        <header class="view-head"><div><h1>操作台</h1>
+          <p class="sub">选一步，或一键全流程。任务会驱动 Chrome，请先在自检里确认前置。</p></div></header>
+        <div class="run-grid">
+          <button class="act-card" data-task="greet"><b>打招呼</b><span>推荐页批量主动打招呼</span></button>
+          <button class="act-card" data-task="collect"><b>收简历</b><span>沟通页收集简历+微信入库</span></button>
+          <button class="act-card" data-task="chat"><b>智能沟通</b><span>阶段感知批量智能回复</span></button>
+          <button class="act-card is-primary" data-task="pipeline"><b>全流程</b><span>打招呼→收集→沟通一条龙</span></button>
+        </div>
+        <div class="panel run-config" id="runConfig" hidden>
+          <div class="panel-head"><h2 id="runTitle">配置</h2><button class="x" id="closeRun">×</button></div>
+          <div class="fields" id="runFields"></div>
+          <div class="run-actions">
+            <label class="check"><input type="checkbox" id="dryRun" /> 预览（dry-run，不真的操作）</label>
+            <button class="primary" id="startRun">开始</button>
+          </div>
+        </div>
+        <div class="panel console-panel" id="consolePanel" hidden>
+          <div class="panel-head"><h2>运行日志 <span class="run-status" id="runStatus"></span></h2>
+            <button class="ghost sm" id="stopRun">停止</button></div>
+          <pre class="console" id="console"></pre>
+        </div>
+      </section>
+
+      <!-- 问伯乐 -->
+      <section class="view" data-view="bole">
+        <header class="view-head"><div><h1>问伯乐</h1><p class="sub">用大白话说需求，伯乐替你想下一步。</p></div></header>
+        <div class="chat">
+          <div class="chat-topbar">
+            <div class="avatar sm">伯</div>
+            <div class="ct-meta"><strong>伯乐</strong><span id="botStatus">在线 · AI 招聘助手</span></div>
+          </div>
+          <div class="chat-log" id="chatLog"></div>
+          <div class="chips" id="chatChips"></div>
+          <form class="chat-input" id="chatForm">
+            <input id="chatText" placeholder="发消息给伯乐…" autocomplete="off" />
+            <button class="send-btn" type="submit" aria-label="发送">
+              <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3 20.5v-6.2l9-2.3-9-2.3V3.5l19 8.5z"/></svg>
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="view" data-view="settings">
+        <header class="view-head"><div><h1>设置</h1>
+          <p class="sub">DeepSeek 决定智能回复与评分质量；不配则降级为模板原文。</p></div></header>
+        <div class="panel">
+          <div class="panel-head"><h2>DeepSeek API</h2><span class="hint" id="keyState"></span></div>
+          <div class="fields">
+            <label class="field"><span>API Key</span>
+              <input id="dsKey" type="password" placeholder="sk-…（留空表示不改动）" autocomplete="off" /></label>
+            <label class="field"><span>模型</span><input id="dsModel" placeholder="deepseek-chat" /></label>
+            <label class="field"><span>接口地址</span><input id="dsBase" placeholder="https://api.deepseek.com" /></label>
+            <label class="field"><span>云同步</span>
+              <select id="cloudSync">
+                <option value="on">开启（脱敏数据同步到你的租户）</option>
+                <option value="off">关闭（仅本地）</option>
+              </select></label>
+          </div>
+          <div class="run-actions">
+            <span class="save-msg" id="saveMsg"></span>
+            <div class="btn-row">
+              <button class="ghost" id="testConfig">测试连接</button>
+              <button class="primary" id="saveConfig">保存</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>装机自检 · 真实检查</h2>
+            <div class="btn-row"><button class="ghost sm" id="fixBtn">一键修复</button>
+              <button class="ghost sm" id="recheck">重新自检</button></div></div>
+          <div id="doctorList" class="doctor-list"><div class="empty">自检中…</div></div>
+          <div id="fixResult" class="fix-result" hidden></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 使用引导 -->
+  <div class="guide-overlay" id="guideOverlay" hidden>
+    <div class="guide-card">
+      <button class="x guide-x" id="closeGuide">×</button>
+      <div class="guide-head"><div class="avatar sm">伯</div>
+        <div><h2>欢迎用伯乐</h2><span>3 步就绪，跟着做即可</span></div></div>
+      <div class="guide-tabs" id="guideTabs">
+        <button class="gtab is-active" data-gtab="start">① 开始使用</button>
+        <button class="gtab" data-gtab="use">② 怎么用</button>
+      </div>
+      <div class="guide-body">
+        <div class="gpane is-active" data-gpane="start">
+          <div class="gstep"><b>1 · 装机自检全绿</b>
+            <p>确认前置就绪；有缺的点「一键修复」（缺配置自动补）。</p>
+            <button class="ghost sm goto" data-goto="settings">去设置 · 自检</button></div>
+          <div class="gstep"><b>2 · 填 DeepSeek Key</b>
+            <p>决定 AI 回复与评分质量；填完点「测试连接」。不填会降级成模板话术。</p>
+            <button class="ghost sm goto" data-goto="settings">去设置 · 填 Key</button></div>
+          <div class="gstep"><b>3 · 开三项系统权限（macOS 需手动）</b>
+            <p>系统不允许程序自己授权，点下面直达面板，给运行程序勾选：</p>
+            <div class="glinks">
+              <a class="ghost sm" href="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility">辅助功能</a>
+              <a class="ghost sm" href="x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture">屏幕录制</a>
+              <a class="ghost sm" href="x-apple.systempreferences:com.apple.preference.security?Privacy_Automation">自动化</a>
+            </div>
+            <p class="ghint">另需：Chrome 已登录 BOSS + 菜单「显示→开发者→允许 Apple 事件 JS」。</p></div>
+        </div>
+        <div class="gpane" data-gpane="use">
+          <div class="gstep"><b>最省心 · 让伯乐帮你干</b>
+            <p>像聊天一样说「谁最合适」「帮我打招呼 20 人」，它会真查数据/真干活（动作会先让你确认）。</p>
+            <button class="ghost sm goto" data-goto="bole">去问伯乐</button></div>
+          <div class="gstep"><b>更可控 · 操作台一步步</b>
+            <p>打招呼 / 收简历 / 智能沟通 / 全流程；<b>第一次先勾「预览」</b>空跑确认，再真跑，看实时日志。</p>
+            <button class="ghost sm goto" data-goto="run">去操作台</button></div>
+          <div class="gstep"><b>看人 · 看板点候选人</b>
+            <p>点卡片看完整档案：个人信息 / 简历 PDF / AI 评分维度依据 / 聊天记录。高分的直接约面试。</p>
+            <button class="ghost sm goto" data-goto="board">去看板</button></div>
+        </div>
+      </div>
+      <div class="guide-foot">
+        <span class="ghint">随时点左侧「📖 使用引导」再看</span>
+        <button class="primary" id="guideDone">开始使用</button>
+      </div>
+      <p class="powered">详细教程见 docs/安装教程.md、使用教程.md · powered by Open CAIO · Daniel Li</p>
+    </div>
+  </div>
+
+  <!-- 候选人详情弹层 -->
+  <div class="modal" id="candidateModal" hidden>
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-card">
+      <button class="x modal-x" id="closeModal">×</button>
+      <div class="modal-head" id="modalHead"></div>
+      <div class="modal-tabs" id="modalTabs">
+        <button class="mtab is-active" data-tab="info">个人信息</button>
+        <button class="mtab" data-tab="resume">简历预览</button>
+        <button class="mtab" data-tab="score">AI 评分</button>
+        <button class="mtab" data-tab="chat">聊天记录</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

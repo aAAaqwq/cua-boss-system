@@ -34,7 +34,16 @@ cua-boss-system/
 │   ├── cua_interview.py        # 预约面试(选线上/线下+日期+时间，成功后写回DB)
 │   ├── interview_reminder.py   # 面试提醒(读DB已约面试，可发macOS通知，纯读不操作Chrome)
 │   ├── query_db.py             # 数据库查询/统计/CSV导出 + --rank评分排行榜
-│   └── parse_resume.py         # PDF简历转文字(主路径解析器)+批量回填DB正文(--backfill)
+│   ├── parse_resume.py         # PDF简历转文字(主路径解析器)+批量回填DB正文(--backfill)
+│   ├── bole.py                 # 和「伯乐」对话(DeepSeek驱动, app/bole_agent.py)；--ask/--json 供桌面App
+│   └── doctor.py               # 装机自检(前置就绪体检, --json 供App首次引导)
+├── desktop/                  # P2 桌面端(本地 Web App = 将来 Tauri 壳的 WebView 前端)
+│   ├── server.py             # 纯标准库 HTTP 路由(仅绑 127.0.0.1)，SIGTERM 优雅退出+端口回退
+│   ├── services.py           # 数据/业务层: 读库/跑脚本/登录门禁/评分/配置读写(被 server 调)
+│   ├── bole_tools.py         # 伯乐 agent 工具集(读真实库+跑真实脚本+约面试)，供 run_agent 调用
+│   ├── ui/                   # 单页控制台: 登录门禁→看板/操作台/问伯乐/设置(可配 DeepSeek key)
+│   ├── build_app.sh          # 生成原生 macOS「伯乐.app」(osacompile,真 Mach-O,双击无终端窗口)
+│   └── 伯乐.command          # 终端版启动器(可 Ctrl-C 停)
 ├── data/
 │   └── candidates.db         # 候选人数据(collect+chat_loop 共享)
 ├── .env.example              # DeepSeek API 配置模板
@@ -223,6 +232,37 @@ python scripts/query_db.py --rank --job-id "全栈开发"  # 强制指定岗位(
 ```
 
 **评分对象**: (未评分 ∪ 数据近 N 天更新过且比上次评分新) **且有简历附件内容**(N=scoring.json input_limits.rescore_window_days,默认2;数据更新由 updated_at 触发器跟踪)。**按候选人沟通的职位 job_position 匹配岗位再评分并缓存**(score/scored_at) → 按总分降序展示「最近 --days 天活跃」未面试前 --top 名。--rescore 强制重算,--no-score 只读缓存,无 uid / 无简历者跳过。见下方评分系统。
+
+## 桌面端 (desktop/ — P2 产品化)
+
+> 面向用户的完整使用说明见 [docs/桌面端使用.md](docs/桌面端使用.md)（含「执行端代码在不在安装包里」的说明）。
+
+给不懂技术的 HR 的图形界面。**本地 Web App**：一个只绑 `127.0.0.1` 的纯标准库 HTTP 服务，把浏览器 UI 桥接到既有脚本与 `candidates.db`。**就是将来 Tauri 壳的 WebView 前端**(打包时直接复用 `desktop/ui` 与 `/api` 接口，不重写)。
+
+```bash
+python desktop/server.py            # 起服务 + 自动开浏览器(默认 127.0.0.1:8765)
+python desktop/server.py --port 8888 --no-open
+bash desktop/build_app.sh           # 生成原生「伯乐.app」→ 之后双击 App 图标即用
+# 或双击 desktop/伯乐.command (终端版,可 Ctrl-C 停)
+```
+
+> **打包成桌面程序**: `desktop/build_app.sh` 用系统自带 `osacompile` 生成真 Mach-O 的
+> `伯乐.app`(把本机仓库路径+python 烧进去,双击起服务开浏览器,无终端窗口,已 gitignore)。
+> **当前仍需本机装 Python + 有本仓库**;真正的独立分发(内嵌 Python 运行时 + 签名公证 `.dmg`)
+> 是 P3(见 docs/产品化规划.md)。手搓 shell-script `.app` 在新版 macOS 会被 LaunchServices
+> 拒绝(-10669),故改用 osacompile 原生包。
+
+**登录门禁**: 启动先查 `/api/auth`(读 `data/.cloud_auth.json`)，未登录铺登录页;`/api/auth/login` 调 `app.cloud_sync.login`(Supabase)。未登录时 `/api/run` 返回 401(许可门禁)。
+
+四个页面(登录后):
+- **看板** `/api/dashboard`(只读库统计+评分榜) — **候选人卡片可点** → `/api/candidate?uid=` 详情弹层(个人信息 / 简历PDF预览 `/api/resume?uid=` inline / AI评分维度权重 + `/api/candidate/rescore` 现算每维度得分+依据 / 聊天记录)。
+- **操作台** `/api/run` 白名单任务 greet/collect/chat/pipeline 后台跑 + `/api/job/{id}?since=` 轮询。**日志实时**: 子进程 `python -u` 无缓冲逐行刷出(否则块缓冲攒到最后),前端每 1.2s 追加到控制台。
+- **问伯乐** `/api/bole` 是**真 agent**(不只是聊天): `app.bole_agent.run_agent` 带 DeepSeek 工具调用循环,伯乐可调 `desktop/bole_tools.py` 的工具**真实操作本系统**——读真实候选人库(get_dashboard/top_candidates/find_candidate)、跑真实脚本(run_task 启后台任务/job_status)、约面试(schedule_interview)。动作类默认 dry_run 预览+请用户确认。返回带 `actions`(前端展示🔧透明化)。**指引性 chips 动态生成**(`/api/bole/suggest`,随回复变化,点即发)。
+- **设置** `/api/config` 读写 DeepSeek key/模型/接口/云同步到 `.env` + `/api/config/test` **真实打一次 DeepSeek**验证可用(非查存在)。
+
+**DeepSeek key 在设置页即可配**: 写 `.env` **并同时** `os.environ` → 无需重启即时生效(`_get_deepseek_config` 每次读 env、env 优先级 > .env);掩码回显、掩码值再存不误覆盖真 key;原子写、保留注释。用户不用碰终端。
+
+**安全**: 服务仅回环地址、静态文件防目录穿越、`/api/resume` 路径限定 `data/resumes/` 内防穿越、任务白名单防任意命令执行、DB 全参数化查询、key 掩码返回。简历下载侧 `_js_str()` 统一转义(防 JS 注入)、`_is_safe_pdf_url()` 域名白名单(防 SSRF/`file://`)。
 
 ## 话术模板 (config/reply.json / reply-templates.json)
 
