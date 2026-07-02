@@ -57,6 +57,7 @@
         <button class="nav-item" data-view="run">操作台</button>
         <button class="nav-item" data-view="bole">问伯乐</button>
         <button class="nav-item" data-view="settings">设置</button>
+        <button class="nav-item guide-nav" id="guideBtn">📖 使用引导</button>
       </nav>
       <div class="rail-foot">
         <div class="health-pill" id="healthPill" title="装机自检"><span class="dot"></span><span id="healthText">自检中…</span></div>
@@ -159,6 +160,53 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- 使用引导 -->
+  <div class="guide-overlay" id="guideOverlay" hidden>
+    <div class="guide-card">
+      <button class="x guide-x" id="closeGuide">×</button>
+      <div class="guide-head"><div class="avatar sm">伯</div>
+        <div><h2>欢迎用伯乐</h2><span>3 步就绪，跟着做即可</span></div></div>
+      <div class="guide-tabs" id="guideTabs">
+        <button class="gtab is-active" data-gtab="start">① 开始使用</button>
+        <button class="gtab" data-gtab="use">② 怎么用</button>
+      </div>
+      <div class="guide-body">
+        <div class="gpane is-active" data-gpane="start">
+          <div class="gstep"><b>1 · 装机自检全绿</b>
+            <p>确认前置就绪；有缺的点「一键修复」（缺配置自动补）。</p>
+            <button class="ghost sm goto" data-goto="settings">去设置 · 自检</button></div>
+          <div class="gstep"><b>2 · 填 DeepSeek Key</b>
+            <p>决定 AI 回复与评分质量；填完点「测试连接」。不填会降级成模板话术。</p>
+            <button class="ghost sm goto" data-goto="settings">去设置 · 填 Key</button></div>
+          <div class="gstep"><b>3 · 开三项系统权限（macOS 需手动）</b>
+            <p>系统不允许程序自己授权，点下面直达面板，给运行程序勾选：</p>
+            <div class="glinks">
+              <a class="ghost sm" href="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility">辅助功能</a>
+              <a class="ghost sm" href="x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture">屏幕录制</a>
+              <a class="ghost sm" href="x-apple.systempreferences:com.apple.preference.security?Privacy_Automation">自动化</a>
+            </div>
+            <p class="ghint">另需：Chrome 已登录 BOSS + 菜单「显示→开发者→允许 Apple 事件 JS」。</p></div>
+        </div>
+        <div class="gpane" data-gpane="use">
+          <div class="gstep"><b>最省心 · 让伯乐帮你干</b>
+            <p>像聊天一样说「谁最合适」「帮我打招呼 20 人」，它会真查数据/真干活（动作会先让你确认）。</p>
+            <button class="ghost sm goto" data-goto="bole">去问伯乐</button></div>
+          <div class="gstep"><b>更可控 · 操作台一步步</b>
+            <p>打招呼 / 收简历 / 智能沟通 / 全流程；<b>第一次先勾「预览」</b>空跑确认，再真跑，看实时日志。</p>
+            <button class="ghost sm goto" data-goto="run">去操作台</button></div>
+          <div class="gstep"><b>看人 · 看板点候选人</b>
+            <p>点卡片看完整档案：个人信息 / 简历 PDF / AI 评分维度依据 / 聊天记录。高分的直接约面试。</p>
+            <button class="ghost sm goto" data-goto="board">去看板</button></div>
+        </div>
+      </div>
+      <div class="guide-foot">
+        <span class="ghint">随时点左侧「📖 使用引导」再看</span>
+        <button class="primary" id="guideDone">开始使用</button>
+      </div>
+      <p class="powered">详细教程见 docs/安装教程.md、使用教程.md · powered by Open CAIO · Daniel Li</p>
+    </div>
   </div>
 
   <!-- 候选人详情弹层 -->

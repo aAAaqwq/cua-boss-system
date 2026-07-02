@@ -18,7 +18,25 @@ function enterApp(email) {
   $("#app").hidden = false;
   $("#userEmail").textContent = email || "已登录";
   loadDoctor(); loadBoard();
+  if (!localStorage.getItem("bole_guide_seen")) openGuide();   // 首次登录自动弹引导
 }
+
+/* ── 使用引导 ── */
+function openGuide() { $("#guideOverlay").hidden = false; }
+function closeGuide() { $("#guideOverlay").hidden = true; localStorage.setItem("bole_guide_seen", "1"); }
+$("#closeGuide").addEventListener("click", closeGuide);
+$("#guideDone").addEventListener("click", closeGuide);
+$("#guideTabs").addEventListener("click", (e) => {
+  const t = e.target.closest(".gtab");
+  if (!t) return;
+  $$(".gtab").forEach((x) => x.classList.toggle("is-active", x === t));
+  $$(".gpane").forEach((p) => p.classList.toggle("is-active", p.dataset.gpane === t.dataset.gtab));
+});
+$$(".goto").forEach((b) => b.addEventListener("click", () => {
+  closeGuide();
+  const nav = document.querySelector(`.nav-item[data-view="${b.dataset.goto}"]`);
+  if (nav) nav.click();
+}));
 // 登录前必须勾选同意隐私条款
 $("#agreeTerms").addEventListener("change", (e) => { $("#loginBtn").disabled = !e.target.checked; });
 $("#showTerms").addEventListener("click", () => { $("#termsOverlay").hidden = false; });
@@ -59,6 +77,7 @@ $("#quitBtn").addEventListener("click", async () => {
 $("#nav").addEventListener("click", (e) => {
   const btn = e.target.closest(".nav-item");
   if (!btn) return;
+  if (btn.id === "guideBtn") { openGuide(); return; }   // 引导是弹层，不切视图
   const view = btn.dataset.view;
   $$(".nav-item").forEach((b) => b.classList.toggle("is-active", b === btn));
   $$(".view").forEach((v) => v.classList.toggle("is-active", v.dataset.view === view));
